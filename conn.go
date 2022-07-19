@@ -539,13 +539,13 @@ func (c *Conn) notifyWatches(ev Event) {
 	wTypes := []watchType{watchTypePersistent}
 	switch ev.Type {
 	case EventNodeCreated:
-		wTypes = []watchType{watchTypeExist}
+		wTypes = append(wTypes, watchTypeExist)
 	case EventNodeDataChanged:
-		wTypes = []watchType{watchTypeExist, watchTypeData}
+		wTypes = append(wTypes, watchTypeExist, watchTypeData)
 	case EventNodeChildrenChanged:
-		wTypes = []watchType{watchTypeChild}
+		wTypes = append(wTypes, watchTypeChild)
 	case EventNodeDeleted:
-		wTypes = []watchType{watchTypeExist, watchTypeData, watchTypeChild}
+		wTypes = append(wTypes, watchTypeExist, watchTypeData, watchTypeChild)
 	}
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()

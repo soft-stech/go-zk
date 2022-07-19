@@ -6,14 +6,14 @@ jobs:
     name: unittest
     strategy:
       matrix:
-        zk-version: [3.5.8, 3.6.1]
-        go-version: [1.13.x, 1.14.x]
+        zk-version: [3.6.2]
+        go-version: [1.17.x, 1.18.x]
     runs-on: ubuntu-latest
     steps:
       - name: Setup Go
         uses: actions/setup-go@v1
         with:
-            go-version: ${{ matrix.go-version }} 
+            go-version: ${{ matrix.go-version }}
 
       - name: Setup Java
         uses: actions/setup-java@v1

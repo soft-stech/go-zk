@@ -851,10 +851,10 @@ func TestSetWatchers(t *testing.T) {
 	// to ensure they didn't exceed the expected packet set.
 	buf := make([]byte, bufferSize)
 	totalWatches := 0
-	actualReqs := setWatchReqs.Load().([]*setWatchesRequest)
+	actualReqs := setWatchReqs.Load().([]*setWatches2Request)
 	if len(actualReqs) < 12 {
 		// sanity check: we should have generated *at least* 12 requests to reset watches
-		t.Fatalf("too few setWatchesRequest messages: %d", len(actualReqs))
+		t.Fatalf("too few setWatches2Request messages: %d", len(actualReqs))
 	}
 	for _, r := range actualReqs {
 		totalWatches += len(r.ChildWatches) + len(r.DataWatches) + len(r.ExistWatches)
@@ -862,12 +862,12 @@ func TestSetWatchers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encodePacket failed: %v! request:\n%+v", err, r)
 		} else if n > 1024 {
-			t.Fatalf("setWatchesRequest exceeded allowed size (%d > 1024)! request:\n%+v", n, r)
+			t.Fatalf("setWatches2Request exceeded allowed size (%d > 1024)! request:\n%+v", n, r)
 		}
 	}
 
 	if totalWatches != len(testPaths)+1 {
-		t.Fatalf("setWatchesRequests did not include all expected watches; expecting %d, got %d", len(testPaths)+1, totalWatches)
+		t.Fatalf("setWatches2Requests did not include all expected watches; expecting %d, got %d", len(testPaths)+1, totalWatches)
 	}
 }
 

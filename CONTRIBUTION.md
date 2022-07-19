@@ -1,5 +1,7 @@
 # how to contribute to the go zookeeper library
 
+/!\ This is the original guidelines for https://github.com/go-zookeeper/zk /!\
+
 ## **Did you find a bug?**
 
 * **Ensure the bug was not already reported** by searching on GitHub under [Issues](https://github.com/go-zookeeper/zk/issues).

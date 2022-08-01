@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	gopath "path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1456,6 +1457,80 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 		}
 		if res.err != nil {
 			return fmt.Errorf("failed connection setAuth request: %v", res.err)
+		}
+	}
+
+	return nil
+}
+
+// WalkBreadthFirst walks down the children of a given path, depth first.
+func (c *Conn) WalkDepthFirst(path string, includeSelf bool, visitor func(p string, stat *Stat) error) error {
+	children, stat, err := c.Children(path)
+	if err != nil {
+		if err == ErrNoNode {
+			return nil // Ignore ErrNoNode.
+		}
+		return err
+	}
+
+	for _, child := range children {
+		if err = c.WalkDepthFirst(gopath.Join(path, child), true, visitor); err != nil {
+			return err
+		}
+	}
+
+	if includeSelf {
+		if err = visitor(path, stat); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// WalkBreadthFirst walks down the children of a given path, breadth first.
+func (c *Conn) WalkBreadthFirst(path string, includeSelf bool, visitor func(p string, stat *Stat) error) error {
+	children, stat, err := c.Children(path)
+	if err != nil {
+		if err == ErrNoNode {
+			return nil // Ignore ErrNoNode.
+		}
+		return err
+	}
+
+	if includeSelf {
+		if err = visitor(path, stat); err != nil {
+			return err
+		}
+	}
+
+	for _, child := range children {
+		if err = c.WalkBreadthFirst(gopath.Join(path, child), true, visitor); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// WalkLeaves walks amongst a given path leaves, a leaf is a znode with no children.
+func (c *Conn) WalkLeaves(path string, visitor func(p string, stat *Stat) error) error {
+	children, stat, err := c.Children(path)
+	if err != nil {
+		if err == ErrNoNode {
+			return nil // Ignore ErrNoNode.
+		}
+		return err
+	}
+
+	if stat.NumChildren == 0 {
+		// Found a leaf.
+		return visitor(path, stat)
+	}
+
+	for _, child := range children {
+		if err = c.WalkLeaves(gopath.Join(path, child), visitor); err != nil {
+			return err
 		}
 	}
 

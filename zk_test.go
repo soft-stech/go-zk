@@ -1218,3 +1218,241 @@ func (l *testLogger) Reset() []string {
 	l.events = nil
 	return ret
 }
+
+func TestWalkDepthFirst(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	paths := []string{
+		"/gozk-test-walkdepthfirst",
+		"/gozk-test-walkdepthfirst/a",
+		"/gozk-test-walkdepthfirst/a/b",
+		"/gozk-test-walkdepthfirst/a/c",
+		"/gozk-test-walkdepthfirst/a/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	t.Run("IncludeSelf", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkDepthFirst("/gozk-test-walkdepthfirst/a", true, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkDepthFirst returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkdepthfirst/a/b",
+			"/gozk-test-walkdepthfirst/a/c/d",
+			"/gozk-test-walkdepthfirst/a/c",
+			"/gozk-test-walkdepthfirst/a",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkDepthFirst returned the wrong paths, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("ExcludeSelf", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkDepthFirst("/gozk-test-walkdepthfirst/a", false, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkDepthFirst returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkdepthfirst/a/b",
+			"/gozk-test-walkdepthfirst/a/c/d",
+			"/gozk-test-walkdepthfirst/a/c",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkDepthFirst returned the wrong paths, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkDepthFirst("/gozk-test-walkdepthfirst/e", false, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkDepthFirst returned error: %+v", err)
+		}
+
+		if len(visited) != 0 {
+			t.Fatalf("WalkDepthFirst returned the wrong paths, exptected [], got %+v", visited)
+		}
+	})
+}
+
+func TestWalkBreadthFirst(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	paths := []string{
+		"/gozk-test-walkbreadthfirst",
+		"/gozk-test-walkbreadthfirst/a",
+		"/gozk-test-walkbreadthfirst/a/b",
+		"/gozk-test-walkbreadthfirst/a/c",
+		"/gozk-test-walkbreadthfirst/a/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	t.Run("IncludeSelf", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkBreadthFirst("/gozk-test-walkbreadthfirst/a", true, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkBreadthFirst returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkbreadthfirst/a",
+			"/gozk-test-walkbreadthfirst/a/b",
+			"/gozk-test-walkbreadthfirst/a/c",
+			"/gozk-test-walkbreadthfirst/a/c/d",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkBreadthFirst returned the wrong paths, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("ExcludeSelf", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkBreadthFirst("/gozk-test-walkbreadthfirst/a", false, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkBreadthFirst returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkbreadthfirst/a/b",
+			"/gozk-test-walkbreadthfirst/a/c",
+			"/gozk-test-walkbreadthfirst/a/c/d",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkBreadthFirst returned the wrong paths, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkBreadthFirst("/gozk-test-walkbreadthfirst/e", false, func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkBreadthFirst returned error: %+v", err)
+		}
+
+		if len(visited) != 0 {
+			t.Fatalf("WalkBreadthFirst returned the wrong paths, exptected [], got %+v", visited)
+		}
+	})
+}
+
+func TestWalkLeaves(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	paths := []string{
+		"/gozk-test-walkleaves",
+		"/gozk-test-walkleaves/a",
+		"/gozk-test-walkleaves/a/b",
+		"/gozk-test-walkleaves/a/c",
+		"/gozk-test-walkleaves/a/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	t.Run("Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkLeaves("/gozk-test-walkleaves/a", func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkLeaves returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkleaves/a/b",
+			"/gozk-test-walkleaves/a/c/d",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkLeaves("/gozk-test-walkleaves/e", func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkLeaves returned error: %+v", err)
+		}
+
+		if len(visited) != 0 {
+			t.Fatalf("WalkLeaves returned the wrong leaves, exptected [], got %+v", visited)
+		}
+	})
+}

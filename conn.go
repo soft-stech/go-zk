@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1634,4 +1635,103 @@ func (c *Conn) WalkLeaves(path string, visitor func(p string, stat *Stat) error)
 	}
 
 	return nil
+}
+
+type CachedLeavesWalker struct {
+	events <-chan Event
+	active int32
+	tree   node
+	lock   sync.RWMutex
+}
+
+type node map[string]node
+
+func (c *Conn) AddCachedLeavesWalker(path string) (*CachedLeavesWalker, error) {
+	events, err := c.AddWatch(path, true)
+	if err != nil {
+		return nil, err
+	}
+
+	w := &CachedLeavesWalker{
+		events: events,
+		tree:   make(node),
+		lock:   sync.RWMutex{},
+	}
+
+	go w.eventLoop()
+	c.WalkLeaves(path, func(p string, stat *Stat) error {
+		nodes := strings.Split(p, "/")
+		w.lock.Lock()
+		w.setTree(nodes, w.tree)
+		w.lock.Unlock()
+		return nil
+	})
+	return w, nil
+}
+
+func (w *CachedLeavesWalker) setTree(nodes []string, tree node) {
+	if len(nodes) == 0 {
+		return
+	}
+
+	if _, ok := tree[nodes[0]]; !ok {
+		tree[nodes[0]] = make(node)
+	}
+	w.setTree(nodes[1:], tree[nodes[0]])
+}
+
+func (w *CachedLeavesWalker) deleteTree(nodes []string, tree node) {
+	if len(nodes) == 1 {
+		delete(tree, nodes[0])
+	} else {
+		w.deleteTree(nodes[1:], tree[nodes[0]])
+	}
+}
+
+func (w *CachedLeavesWalker) eventLoop() {
+	atomic.StoreInt32(&w.active, 1)
+	defer atomic.StoreInt32(&w.active, 0)
+	for e := range w.events {
+		w.lock.Lock()
+		nodes := strings.Split(e.Path, "/")
+		switch e.Type {
+		case EventNodeCreated:
+			fallthrough
+		case EventNodeDataChanged:
+			w.setTree(nodes, w.tree)
+		case EventNodeChildrenChanged:
+			w.deleteTree(nodes, w.tree)
+		case EventNodeDeleted:
+			w.deleteTree(nodes, w.tree)
+		}
+		w.lock.Unlock()
+	}
+}
+
+func (w *CachedLeavesWalker) WalkLeaves(visitor func(p string) error) error {
+	if atomic.LoadInt32(&w.active) != 1 {
+		return fmt.Errorf("CachedLeavesWalker not ready yet")
+	}
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+	return w.walkLeaves("/", w.tree, visitor)
+}
+
+func (w *CachedLeavesWalker) walkLeaves(p string, tree node, visitor func(p string) error) error {
+	if len(tree) > 0 {
+		for l := range tree {
+			if err := w.walkLeaves(gopath.Join(p, l), tree[l], visitor); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return visitor(p)
+}
+
+func (w *CachedLeavesWalker) DumpTree() {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+	data, _ := json.MarshalIndent(w.tree, "", "    ")
+	fmt.Println(string(data))
 }

@@ -690,13 +690,16 @@ func TestChildWatch(t *testing.T) {
 
 	select {
 	case ev := <-childCh:
+		if ev.Type != EventNodeChildrenChanged {
+			t.Fatalf("Child watcher event wrong type %v instead of EventNodeChildrenChanged", ev.Type)
+		}
 		if ev.Err != nil {
-			t.Fatalf("Child watcher error %+v", ev.Err)
+			t.Fatalf("Child watcher event error %+v", ev.Err)
 		}
 		if ev.Path != "/" {
-			t.Fatalf("Child watcher wrong path %s instead of %s", ev.Path, "/")
+			t.Fatalf("Child watcher event wrong path %s instead of %s", ev.Path, "/")
 		}
-	case _ = <-time.After(time.Second * 2):
+	case <-time.After(time.Second * 2):
 		t.Fatal("Child watcher timed out")
 	}
 
@@ -717,14 +720,472 @@ func TestChildWatch(t *testing.T) {
 
 	select {
 	case ev := <-childCh:
+		if ev.Type != EventNodeDeleted {
+			t.Fatalf("Child watcher event wrong type %v instead of EventNodeChildrenChanged", ev.Type)
+		}
 		if ev.Err != nil {
-			t.Fatalf("Child watcher error %+v", ev.Err)
+			t.Fatalf("Child watcher event error %+v", ev.Err)
 		}
 		if ev.Path != "/gozk-test" {
-			t.Fatalf("Child watcher wrong path %s instead of %s", ev.Path, "/")
+			t.Fatalf("Child watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
 		}
-	case _ = <-time.After(time.Second * 2):
+	case <-time.After(time.Second * 2):
 		t.Fatal("Child watcher timed out")
+	}
+}
+
+func TestRemoveChildWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	children, stat, childCh, err := zk.ChildrenW("/")
+	if err != nil {
+		t.Fatalf("Children returned error: %+v", err)
+	} else if stat == nil {
+		t.Fatal("Children returned nil stat")
+	} else if len(children) < 1 {
+		t.Fatal("Children should return at least 1 child")
+	}
+
+	err = zk.RemoveWatch(childCh)
+	if err != nil {
+		t.Fatalf("RemoveWatch returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-childCh:
+		if ev.Type != EventNotWatching {
+			t.Fatalf("Child watcher event wrong type %v instead of EventNotWatching", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Child watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/" {
+			t.Fatalf("Child watcher event wrong path %s instead of %s", ev.Path, "/")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Child watcher timed out")
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case _, ok := <-childCh:
+		if ok {
+			t.Fatalf("Child watcher should have been closed")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Child watcher timed out")
+	}
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+}
+
+func TestExistsWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	exists, stat, existsCh, err := zk.ExistsW("/gozk-test")
+	if err != nil {
+		t.Fatalf("Exists returned error: %+v", err)
+	} else if stat == nil {
+		t.Fatal("Exists returned nil stat")
+	} else if exists {
+		t.Fatal("Exists returned true")
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case ev := <-existsCh:
+		if ev.Type != EventNodeCreated {
+			t.Fatalf("Exists watcher event wrong event type %v instead of %v", ev.Type, EventNodeCreated)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Exists watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/gozk-test" {
+			t.Fatalf("Exists watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Exists watcher timed out")
+	}
+
+	// Delete of the watched node should trigger the watch
+
+	exists, stat, existsCh, err = zk.ExistsW("/gozk-test")
+	if err != nil {
+		t.Fatalf("Exists returned error: %+v", err)
+	} else if stat == nil {
+		t.Fatal("Exists returned nil stat")
+	} else if !exists {
+		t.Fatal("Exists should return true")
+	}
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-existsCh:
+		if ev.Type != EventNodeDeleted {
+			t.Fatalf("Exists watcher event wrong event type %v instead of %v", ev.Type, EventNodeDeleted)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Exists watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/gozk-test" {
+			t.Fatalf("Exists watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Exists watcher timed out")
+	}
+}
+
+func TestRemoveExistsWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	exists, _, existsCh, err := zk.ExistsW("/gozk-test")
+	if err != nil {
+		t.Fatalf("Exists returned error: %+v", err)
+	} else if exists {
+		t.Fatal("Exists returned true")
+	}
+
+	err = zk.RemoveWatch(existsCh)
+	if err != nil {
+		t.Fatalf("RemoveWatch returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-existsCh:
+		if ev.Type != EventNotWatching {
+			t.Fatalf("Exists watcher event wrong type %v instead of %v", ev.Type, EventNotWatching)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Exists watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/gozk-test" {
+			t.Fatalf("Exists watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Exists watcher timed out")
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case _, ok := <-existsCh:
+		if ok {
+			t.Fatalf("Exists watcher should have been closed")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Exists watcher timed out")
+	}
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+}
+
+func TestAddPersistentWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	watchCh, err := zk.AddWatch("/", false)
+	if err != nil {
+		t.Fatalf("AddWatch returned error: %+v", err)
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNodeChildrenChanged {
+			t.Fatalf("Watcher event wrong type %v instead of EventNodeChildrenChanged", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+
+	// Delete of the watched node should trigger the watch
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNodeChildrenChanged {
+			t.Fatalf("Watcher event wrong type %v instead of EventNodeChildrenChanged", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+}
+
+func TestRemovePersistentWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	watchCh, err := zk.AddWatch("/", false)
+	if err != nil {
+		t.Fatalf("AddWatch returned error: %+v", err)
+	}
+
+	err = zk.RemoveWatch(watchCh)
+	if err != nil {
+		t.Fatalf("RemoveWatch returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNotWatching {
+			t.Fatalf("Watcher event wrong type %v instead of EventNotWatching", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Child watcher timed out")
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case _, ok := <-watchCh:
+		if ok {
+			t.Fatalf("Watcher should have been closed")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+}
+
+func TestAddPersistentRecursiveWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	watchCh, err := zk.AddWatch("/", true)
+	if err != nil {
+		t.Fatalf("AddWatch returned error: %+v", err)
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNodeCreated {
+			t.Fatalf("Watcher event wrong type %v instead of EventNodeCreated", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/gozk-test" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+
+	// Delete of the watched node should trigger the watch
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNodeDeleted {
+			t.Fatalf("Watcher event wrong type %v instead of EventNodeDeleted", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/gozk-test" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/gozk-test")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+}
+
+func TestRemovePersistentRecursiveWatch(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	watchCh, err := zk.AddWatch("/", true)
+	if err != nil {
+		t.Fatalf("AddWatch returned error: %+v", err)
+	}
+
+	err = zk.RemoveWatch(watchCh)
+	if err != nil {
+		t.Fatalf("RemoveWatch returned error: %+v", err)
+	}
+
+	select {
+	case ev := <-watchCh:
+		if ev.Type != EventNotWatching {
+			t.Fatalf("Watcher event wrong type %v instead of EventNotWatching", ev.Type)
+		}
+		if ev.Err != nil {
+			t.Fatalf("Watcher event error %+v", ev.Err)
+		}
+		if ev.Path != "/" {
+			t.Fatalf("Watcher event wrong path %s instead of %s", ev.Path, "/")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Child watcher timed out")
+	}
+
+	if path, err := zk.Create("/gozk-test", []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		t.Fatalf("Create returned error: %+v", err)
+	} else if path != "/gozk-test" {
+		t.Fatalf("Create returned different path '%s' != '/gozk-test'", path)
+	}
+
+	select {
+	case _, ok := <-watchCh:
+		if ok {
+			t.Fatalf("Watcher should have been closed")
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("Watcher timed out")
+	}
+
+	if err := zk.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		t.Fatalf("Delete returned error: %+v", err)
 	}
 }
 

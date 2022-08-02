@@ -140,7 +140,7 @@ type statResponse struct {
 
 //
 
-type checkVersionRequest PathVersionRequest
+type CheckVersionRequest PathVersionRequest
 type closeRequest struct{}
 type closeResponse struct{}
 
@@ -159,14 +159,14 @@ type connectResponse struct {
 	Passwd          []byte
 }
 
-type createRequest struct {
+type CreateRequest struct {
 	Path  string
 	Data  []byte
 	Acl   []ACL
 	Flags int32
 }
 
-type createContainerRequest createRequest
+type CreateContainerRequest CreateRequest
 
 type CreateTTLRequest struct {
 	Path  string
@@ -177,7 +177,7 @@ type CreateTTLRequest struct {
 }
 
 type createResponse pathResponse
-type deleteRequest PathVersionRequest
+type DeleteRequest PathVersionRequest
 type deleteResponse struct{}
 
 type errorResponse struct {
@@ -241,7 +241,7 @@ type addWatchRequest struct {
 
 type addWatchResponse struct{}
 
-type setDataRequest struct {
+type SetDataRequest struct {
 	Path    string
 	Data    []byte
 	Version int32
@@ -282,7 +282,7 @@ type setWatches2Request struct {
 
 type setWatches2Response struct{}
 
-type removeWatchesRequest struct {
+type RemoveWatchesRequest struct {
 	Path string
 	Type WatcherType
 }
@@ -624,13 +624,13 @@ func requestStructForOp(op int32) interface{} {
 	case opClose:
 		return &closeRequest{}
 	case opCreate:
-		return &createRequest{}
+		return &CreateRequest{}
 	case opCreateContainer:
-		return &createContainerRequest{}
+		return &CreateContainerRequest{}
 	case opCreateTTL:
 		return &CreateTTLRequest{}
 	case opDelete:
-		return &deleteRequest{}
+		return &DeleteRequest{}
 	case opExists:
 		return &existsRequest{}
 	case opGetAcl:
@@ -646,7 +646,7 @@ func requestStructForOp(op int32) interface{} {
 	case opSetAcl:
 		return &setAclRequest{}
 	case opSetData:
-		return &setDataRequest{}
+		return &SetDataRequest{}
 	case opSetWatches:
 		return &setWatchesRequest{}
 	case opSetWatches2:
@@ -654,13 +654,13 @@ func requestStructForOp(op int32) interface{} {
 	case opAddWatch:
 		return &addWatchRequest{}
 	case opRemoveWatches:
-		return &removeWatchesRequest{}
+		return &RemoveWatchesRequest{}
 	case opSync:
 		return &syncRequest{}
 	case opSetAuth:
 		return &setAuthRequest{}
 	case opCheck:
-		return &checkVersionRequest{}
+		return &CheckVersionRequest{}
 	case opMulti:
 		return &multiRequest{}
 	case opReconfig:

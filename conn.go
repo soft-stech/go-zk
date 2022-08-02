@@ -1133,7 +1133,7 @@ func (c *Conn) RemoveWatch(ech <-chan Event) error {
 	if remaining == 0 {
 		// No more watchers remain for the watchPathType, so we can remove the watch from the server.
 		res := &removeWatchesResponse{}
-		_, err := c.request(opRemoveWatches, &removeWatchesRequest{Path: wpt.path, Type: wpt.wType.WatcherType()}, res, nil)
+		_, err := c.request(opRemoveWatches, &RemoveWatchesRequest{Path: wpt.path, Type: wpt.wType.WatcherType()}, res, nil)
 		if err != nil {
 			return err
 		}
@@ -1215,7 +1215,7 @@ func (c *Conn) Set(path string, data []byte, version int32) (*Stat, error) {
 	}
 
 	res := &setDataResponse{}
-	_, err := c.request(opSetData, &setDataRequest{path, data, version}, res, nil)
+	_, err := c.request(opSetData, &SetDataRequest{path, data, version}, res, nil)
 	if err == ErrConnectionClosed {
 		return nil, err
 	}
@@ -1232,7 +1232,7 @@ func (c *Conn) Create(path string, data []byte, flags int32, acl []ACL) (string,
 	}
 
 	res := &createResponse{}
-	_, err := c.request(opCreate, &createRequest{path, data, acl, flags}, res, nil)
+	_, err := c.request(opCreate, &CreateRequest{path, data, acl, flags}, res, nil)
 	if err == ErrConnectionClosed {
 		return "", err
 	}
@@ -1249,7 +1249,7 @@ func (c *Conn) CreateContainer(path string, data []byte, flags int32, acl []ACL)
 	}
 
 	res := &createResponse{}
-	_, err := c.request(opCreateContainer, &createContainerRequest{path, data, acl, flags}, res, nil)
+	_, err := c.request(opCreateContainer, &CreateContainerRequest{path, data, acl, flags}, res, nil)
 	return res.Path, err
 }
 
@@ -1322,7 +1322,7 @@ func (c *Conn) Delete(path string, version int32) error {
 		return err
 	}
 
-	_, err := c.request(opDelete, &deleteRequest{path, version}, &deleteResponse{}, nil)
+	_, err := c.request(opDelete, &DeleteRequest{path, version}, &deleteResponse{}, nil)
 	return err
 }
 
@@ -1423,8 +1423,8 @@ type MultiResponse struct {
 }
 
 // Multi executes multiple ZooKeeper operations or none of them. The provided
-// ops must be one of *createRequest, *deleteRequest, *setDataRequest, or
-// *checkVersionRequest.
+// ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
+// *CheckVersionRequest.
 func (c *Conn) Multi(ops ...interface{}) ([]MultiResponse, error) {
 	req := &multiRequest{
 		Ops:        make([]multiRequestOp, 0, len(ops)),
@@ -1433,13 +1433,13 @@ func (c *Conn) Multi(ops ...interface{}) ([]MultiResponse, error) {
 	for _, op := range ops {
 		var opCode int32
 		switch op.(type) {
-		case *createRequest:
+		case *CreateRequest:
 			opCode = opCreate
-		case *setDataRequest:
+		case *SetDataRequest:
 			opCode = opSetData
-		case *deleteRequest:
+		case *DeleteRequest:
 			opCode = opDelete
-		case *checkVersionRequest:
+		case *CheckVersionRequest:
 			opCode = opCheck
 		default:
 			return nil, fmt.Errorf("unknown operation type %T", op)

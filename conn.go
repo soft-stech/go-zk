@@ -1638,6 +1638,7 @@ func (c *Conn) WalkLeaves(path string, visitor func(p string, stat *Stat) error)
 }
 
 type CachedLeavesWalker struct {
+	conn   *Conn
 	events <-chan Event
 	active int32
 	tree   node
@@ -1653,20 +1654,35 @@ func (c *Conn) AddCachedLeavesWalker(path string) (*CachedLeavesWalker, error) {
 	}
 
 	w := &CachedLeavesWalker{
+		conn:   c,
 		events: events,
 		tree:   make(node),
 		lock:   sync.RWMutex{},
 	}
 
 	go w.eventLoop()
-	c.WalkLeaves(path, func(p string, stat *Stat) error {
+	if err = c.WalkLeaves(path, func(p string, stat *Stat) error {
 		nodes := strings.Split(p, "/")
 		w.lock.Lock()
 		w.setTree(nodes, w.tree)
 		w.lock.Unlock()
 		return nil
-	})
+	}); err != nil {
+		if cerr := w.Close(); cerr != nil {
+			c.logger.Printf("failed to close CachedLeavesWalker: %v", cerr)
+		}
+		return nil, err
+	}
 	return w, nil
+}
+
+func (w *CachedLeavesWalker) Close() error {
+	if atomic.LoadInt32(&w.active) != 1 {
+		if err := w.conn.RemoveWatch(w.events); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *CachedLeavesWalker) setTree(nodes []string, tree node) {

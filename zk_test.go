@@ -1917,3 +1917,93 @@ func TestWalkLeaves(t *testing.T) {
 		}
 	})
 }
+
+func TestCachedLeavesWalker(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	paths := []string{
+		"/gozk-test-cachedleaveswalker",
+		"/gozk-test-cachedleaveswalker/a",
+		"/gozk-test-cachedleaveswalker/a/b",
+		"/gozk-test-cachedleaveswalker/a/c",
+		"/gozk-test-cachedleaveswalker/a/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	walker, err := zk.AddCachedLeavesWalker("/gozk-test-cachedleaveswalker")
+	if err != nil {
+		t.Fatalf("AddCachedLeavesWalker returned error: %+v", err)
+	}
+
+	var visited []string
+	err = walker.WalkLeaves(func(p string) error {
+		visited = append(visited, p)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkLeaves returned error: %+v", err)
+	}
+	expected := []string{
+		"/gozk-test-cachedleaveswalker/a/b",
+		"/gozk-test-cachedleaveswalker/a/c/d",
+	}
+	sort.Strings(expected)
+	sort.Strings(visited) // Order doesn't matter
+	if !reflect.DeepEqual(visited, expected) {
+		t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
+	}
+
+	paths = []string{
+		"/gozk-test-cachedleaveswalker/b",
+		"/gozk-test-cachedleaveswalker/b/b",
+		"/gozk-test-cachedleaveswalker/b/c",
+		"/gozk-test-cachedleaveswalker/b/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	if err := zk.Delete("/gozk-test-cachedleaveswalker/a/b", -1); err != nil {
+		t.Fatalf("Delete returned error: %+v", err)
+	}
+
+	time.Sleep(time.Millisecond * 100)
+
+	visited = []string{}
+	err = walker.WalkLeaves(func(p string) error {
+		visited = append(visited, p)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkLeaves returned error: %+v", err)
+	}
+	expected = []string{
+		"/gozk-test-cachedleaveswalker/a/c/d",
+		"/gozk-test-cachedleaveswalker/b/b",
+		"/gozk-test-cachedleaveswalker/b/c/d",
+	}
+	sort.Strings(expected)
+	sort.Strings(visited) // Order doesn't matter
+	if !reflect.DeepEqual(visited, expected) {
+		t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
+	}
+}

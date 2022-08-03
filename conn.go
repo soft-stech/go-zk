@@ -13,7 +13,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1641,11 +1640,47 @@ type CachedLeavesWalker struct {
 	conn   *Conn
 	events <-chan Event
 	active int32
-	tree   node
+	tree   cachedLeavesTreeNode
 	lock   sync.RWMutex
 }
 
-type node map[string]node
+type cachedLeavesTreeNode map[string]cachedLeavesTreeNode
+
+func (n cachedLeavesTreeNode) EnsurePathPresent(path string) {
+	nodes := strings.Split(path[1:], "/")
+	n.setNodes(nodes)
+}
+
+func (n cachedLeavesTreeNode) EnsurePathAbsent(path string) {
+	nodes := strings.Split(path[1:], "/")
+	n.deleteNodes(nodes)
+}
+
+func (n cachedLeavesTreeNode) setNodes(nodes []string) {
+	if len(nodes) == 0 {
+		return
+	}
+
+	if _, ok := n[nodes[0]]; !ok {
+		n[nodes[0]] = make(cachedLeavesTreeNode)
+	}
+	n[nodes[0]].setNodes(nodes[1:])
+}
+
+func (n cachedLeavesTreeNode) deleteNodes(nodes []string) {
+	l := len(nodes)
+	switch l {
+	case 0:
+		return
+	case 1:
+		if nodes[0] == "" {
+			return // Don't delete root
+		}
+		delete(n, nodes[0])
+	default:
+		n[nodes[0]].deleteNodes(nodes[1:])
+	}
+}
 
 func (c *Conn) AddCachedLeavesWalker(path string) (*CachedLeavesWalker, error) {
 	events, err := c.AddWatch(path, true)
@@ -1656,15 +1691,14 @@ func (c *Conn) AddCachedLeavesWalker(path string) (*CachedLeavesWalker, error) {
 	w := &CachedLeavesWalker{
 		conn:   c,
 		events: events,
-		tree:   make(node),
+		tree:   make(cachedLeavesTreeNode),
 		lock:   sync.RWMutex{},
 	}
 
 	go w.eventLoop()
 	if err = c.WalkLeaves(path, func(p string, stat *Stat) error {
-		nodes := strings.Split(p, "/")
 		w.lock.Lock()
-		w.setTree(nodes, w.tree)
+		w.tree.EnsurePathPresent(p)
 		w.lock.Unlock()
 		return nil
 	}); err != nil {
@@ -1685,40 +1719,20 @@ func (w *CachedLeavesWalker) Close() error {
 	return nil
 }
 
-func (w *CachedLeavesWalker) setTree(nodes []string, tree node) {
-	if len(nodes) == 0 {
-		return
-	}
-
-	if _, ok := tree[nodes[0]]; !ok {
-		tree[nodes[0]] = make(node)
-	}
-	w.setTree(nodes[1:], tree[nodes[0]])
-}
-
-func (w *CachedLeavesWalker) deleteTree(nodes []string, tree node) {
-	if len(nodes) == 1 {
-		delete(tree, nodes[0])
-	} else {
-		w.deleteTree(nodes[1:], tree[nodes[0]])
-	}
-}
-
 func (w *CachedLeavesWalker) eventLoop() {
 	atomic.StoreInt32(&w.active, 1)
 	defer atomic.StoreInt32(&w.active, 0)
 	for e := range w.events {
 		w.lock.Lock()
-		nodes := strings.Split(e.Path, "/")
 		switch e.Type {
 		case EventNodeCreated:
 			fallthrough
 		case EventNodeDataChanged:
-			w.setTree(nodes, w.tree)
+			w.tree.EnsurePathPresent(e.Path)
 		case EventNodeChildrenChanged:
-			w.deleteTree(nodes, w.tree)
+			w.tree.EnsurePathAbsent(e.Path)
 		case EventNodeDeleted:
-			w.deleteTree(nodes, w.tree)
+			w.tree.EnsurePathAbsent(e.Path)
 		}
 		w.lock.Unlock()
 	}
@@ -1733,7 +1747,7 @@ func (w *CachedLeavesWalker) WalkLeaves(visitor func(p string) error) error {
 	return w.walkLeaves("/", w.tree, visitor)
 }
 
-func (w *CachedLeavesWalker) walkLeaves(p string, tree node, visitor func(p string) error) error {
+func (w *CachedLeavesWalker) walkLeaves(p string, tree cachedLeavesTreeNode, visitor func(p string) error) error {
 	if len(tree) > 0 {
 		for l := range tree {
 			if err := w.walkLeaves(gopath.Join(p, l), tree[l], visitor); err != nil {
@@ -1743,11 +1757,4 @@ func (w *CachedLeavesWalker) walkLeaves(p string, tree node, visitor func(p stri
 		return nil
 	}
 	return visitor(p)
-}
-
-func (w *CachedLeavesWalker) DumpTree() {
-	w.lock.RLock()
-	defer w.lock.RUnlock()
-	data, _ := json.MarshalIndent(w.tree, "", "    ")
-	fmt.Println(string(data))
 }

@@ -1,13 +1,16 @@
 package zk
 
 import (
-	"fmt"
 	gopath "path"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
 
+// CachedLeavesWalker is an helper to have fast WalkLeaves by keeping the leaves in memory.
+// Leaves are kept in sync with Zookeeper using a recursive watch.
+// In case the CachedLeavesWalker looses the watch, WalkLeaves will return an ErrNoWatcher.
+// In such case, the walker should be re-instanciated.
 type CachedLeavesWalker struct {
 	conn   *Conn
 	events <-chan Event
@@ -16,6 +19,9 @@ type CachedLeavesWalker struct {
 	lock   sync.RWMutex
 }
 
+// NewCachedLeavesWalker instanciate a new walker.
+// Initial leaves sync is performed during this function,
+// it may be slow depending on the size of the path tree.
 func NewCachedLeavesWalker(conn *Conn, path string) (*CachedLeavesWalker, error) {
 	events, err := conn.AddWatch(path, true)
 	if err != nil {
@@ -44,6 +50,7 @@ func NewCachedLeavesWalker(conn *Conn, path string) (*CachedLeavesWalker, error)
 	return w, nil
 }
 
+// Close ensure we properly stop watching.
 func (w *CachedLeavesWalker) Close() error {
 	if atomic.LoadInt32(&w.active) != 1 {
 		if err := w.conn.RemoveWatch(w.events); err != nil {
@@ -53,6 +60,7 @@ func (w *CachedLeavesWalker) Close() error {
 	return nil
 }
 
+// eventLoop processing the watch events.
 func (w *CachedLeavesWalker) eventLoop() {
 	atomic.StoreInt32(&w.active, 1)
 	defer atomic.StoreInt32(&w.active, 0)
@@ -68,9 +76,12 @@ func (w *CachedLeavesWalker) eventLoop() {
 	}
 }
 
+// WalkLeaves will call the visitor functions for each currently known leaves.
+// Keep in mind that leaves sync is done asynchronously using a watcher.
+// There may be a delay between a node creation/deletion and the cached leaves being updated.
 func (w *CachedLeavesWalker) WalkLeaves(visitor func(p string) error) error {
 	if atomic.LoadInt32(&w.active) != 1 {
-		return fmt.Errorf("CachedLeavesWalker not ready yet")
+		return ErrNoWatcher
 	}
 	w.lock.RLock()
 	defer w.lock.RUnlock()
@@ -89,18 +100,22 @@ func (w *CachedLeavesWalker) walkLeaves(p string, tree cachedLeavesTreeNode, vis
 	return visitor(p)
 }
 
+//cachedLeavesTreeNode represent an in memory znode equivalent.
 type cachedLeavesTreeNode map[string]cachedLeavesTreeNode
 
+// ensurePathPresent will make sure we have the proper in-memory tree for a given path.
 func (n cachedLeavesTreeNode) ensurePathPresent(path string) {
 	nodes := strings.Split(path[1:], "/")
 	n.setNodes(nodes)
 }
 
+// ensurePathPresent will make sure we have remove the in-memory tree for a given path.
 func (n cachedLeavesTreeNode) ensurePathAbsent(path string) {
 	nodes := strings.Split(path[1:], "/")
 	n.deleteNodes(nodes)
 }
 
+// setNodes recursively apply nodes elements to the tree.
 func (n cachedLeavesTreeNode) setNodes(nodes []string) {
 	if len(nodes) == 0 {
 		return
@@ -112,10 +127,11 @@ func (n cachedLeavesTreeNode) setNodes(nodes []string) {
 	n[nodes[0]].setNodes(nodes[1:])
 }
 
+// setNodes recursively remove nodes elements from the tree.
 func (n cachedLeavesTreeNode) deleteNodes(nodes []string) {
 	l := len(nodes)
 	switch l {
-	case 0:
+	case 0: // Safety, should never happen.
 		return
 	case 1:
 		if nodes[0] == "" {

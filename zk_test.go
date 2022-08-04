@@ -1945,7 +1945,7 @@ func TestCachedLeavesWalker(t *testing.T) {
 		}
 	}
 
-	walker, err := zk.AddCachedLeavesWalker("/gozk-test-cachedleaveswalker")
+	walker, err := NewCachedLeavesWalker(zk, "/gozk-test-cachedleaveswalker")
 	if err != nil {
 		t.Fatalf("AddCachedLeavesWalker returned error: %+v", err)
 	}

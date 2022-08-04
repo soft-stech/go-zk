@@ -53,10 +53,13 @@ func TestCachedLeavesTreeNode(t *testing.T) {
 		}
 
 		visisted := []string{}
-		w.WalkLeaves(func(p string) error {
+		err := w.WalkLeaves(func(p string) error {
 			visisted = append(visisted, p)
 			return nil
 		})
+		if err != nil {
+			t.Errorf("WalkLeaves expected no error, got %v", err)
+		}
 
 		sort.Strings(visisted)
 		if !reflect.DeepEqual(visisted, tc.expectedLeavesSet) {
@@ -69,10 +72,13 @@ func TestCachedLeavesTreeNode(t *testing.T) {
 			}
 
 			visisted := []string{}
-			w.WalkLeaves(func(p string) error {
+			err := w.WalkLeaves(func(p string) error {
 				visisted = append(visisted, p)
 				return nil
 			})
+			if err != nil {
+				t.Errorf("WalkLeaves expected no error, got %v", err)
+			}
 
 			sort.Strings(visisted)
 			if !reflect.DeepEqual(visisted, tc.expectedLeavesDelete) {

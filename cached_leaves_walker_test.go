@@ -2,6 +2,7 @@ package zk
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -57,6 +58,7 @@ func TestCachedLeavesTreeNode(t *testing.T) {
 			return nil
 		})
 
+		sort.Strings(visisted)
 		if !reflect.DeepEqual(visisted, tc.expectedLeavesSet) {
 			t.Errorf("setTree: Expected visisted=%+v, got %+v", tc.expectedLeavesSet, visisted)
 		}
@@ -72,6 +74,7 @@ func TestCachedLeavesTreeNode(t *testing.T) {
 				return nil
 			})
 
+			sort.Strings(visisted)
 			if !reflect.DeepEqual(visisted, tc.expectedLeavesDelete) {
 				t.Errorf("deleteTree: Expected visisted=%+v, got %+v", tc.expectedLeavesDelete, visisted)
 			}

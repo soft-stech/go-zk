@@ -10,7 +10,8 @@ import (
 // CachedLeavesWalker is an helper to have fast WalkLeaves by keeping the leaves in memory.
 // Leaves are kept in sync with Zookeeper using a recursive watch.
 // In case the CachedLeavesWalker looses the watch, WalkLeaves will return an ErrNoWatcher.
-// In such case, the walker should be re-instanciated.
+// In such case, the walker should be re-instantiated.
+// Close() should be called to properly terminate the walker.
 type CachedLeavesWalker struct {
 	conn   *Conn
 	events <-chan Event

@@ -1936,6 +1936,8 @@ func TestCachedLeavesWalker(t *testing.T) {
 		"/gozk-test-cachedleaveswalker/a/b",
 		"/gozk-test-cachedleaveswalker/a/c",
 		"/gozk-test-cachedleaveswalker/a/c/d",
+		"/gozk-test-ignoreme",
+		"/gozk-test-ignoreme/a",
 	}
 	for _, p := range paths {
 		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {

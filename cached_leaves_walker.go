@@ -37,7 +37,7 @@ func NewCachedLeavesWalker(conn *Conn, path string) (*CachedLeavesWalker, error)
 	}
 
 	go w.eventLoop()
-	if err = w.conn.WalkLeaves(path, func(p string, stat *Stat) error {
+	if err = w.conn.WalkLeavesParallel(path, func(p string, stat *Stat) error {
 		w.lock.Lock()
 		w.tree.ensurePathPresent(p)
 		w.lock.Unlock()
@@ -101,7 +101,7 @@ func (w *CachedLeavesWalker) walkLeaves(p string, tree cachedLeavesTreeNode, vis
 	return visitor(p)
 }
 
-//cachedLeavesTreeNode represent an in memory znode equivalent.
+// cachedLeavesTreeNode represent an in memory znode equivalent.
 type cachedLeavesTreeNode map[string]cachedLeavesTreeNode
 
 // ensurePathPresent will make sure we have the proper in-memory tree for a given path.

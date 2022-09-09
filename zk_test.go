@@ -1918,6 +1918,70 @@ func TestWalkLeaves(t *testing.T) {
 	})
 }
 
+func TestWalkLeavesParallel(t *testing.T) {
+	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ts.Stop()
+	zk, _, err := ts.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer zk.Close()
+
+	paths := []string{
+		"/gozk-test-walkleavesparallel",
+		"/gozk-test-walkleavesparallel/a",
+		"/gozk-test-walkleavesparallel/a/b",
+		"/gozk-test-walkleavesparallel/a/c",
+		"/gozk-test-walkleavesparallel/a/c/d",
+	}
+	for _, p := range paths {
+		if path, err := zk.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if path != p {
+			t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+		}
+	}
+
+	t.Run("Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkLeaves("/gozk-test-walkleavesparallel/a", func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkLeaves returned error: %+v", err)
+		}
+
+		expected := []string{
+			"/gozk-test-walkleavesparallel/a/b",
+			"/gozk-test-walkleavesparallel/a/c/d",
+		}
+		if !reflect.DeepEqual(visited, expected) {
+			t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
+		}
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		var visited []string
+
+		err := zk.WalkLeaves("/gozk-test-walkleavesparallel/e", func(p string, stat *Stat) error {
+			visited = append(visited, p)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkLeaves returned error: %+v", err)
+		}
+
+		if len(visited) != 0 {
+			t.Fatalf("WalkLeaves returned the wrong leaves, exptected [], got %+v", visited)
+		}
+	})
+}
+
 func TestCachedLeavesWalker(t *testing.T) {
 	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
 	if err != nil {

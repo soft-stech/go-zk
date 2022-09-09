@@ -22,6 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrNoServer indicates that an operation cannot be completed
@@ -1634,4 +1636,31 @@ func (c *Conn) WalkLeaves(path string, visitor func(p string, stat *Stat) error)
 	}
 
 	return nil
+}
+
+// WalkLeaves walks amongst a given path leaves, like WalkLeaves
+// Except it will use goroutines to crawl childrens
+// Which means the `visitor` function may be called in parallel, mind your thread safety.
+func (c *Conn) WalkLeavesParallel(path string, visitor func(p string, stat *Stat) error) error {
+	children, stat, err := c.Children(path)
+	if err != nil {
+		if err == ErrNoNode {
+			return nil // Ignore ErrNoNode.
+		}
+		return err
+	}
+
+	if stat.NumChildren == 0 {
+		// Found a leaf.
+		return visitor(path, stat)
+	}
+
+	eg, _ := errgroup.WithContext(context.Background())
+	for _, child := range children {
+		leavePath := gopath.Join(path, child)
+		eg.Go(func() error {
+			return c.WalkLeavesParallel(leavePath, visitor)
+		})
+	}
+	return eg.Wait()
 }

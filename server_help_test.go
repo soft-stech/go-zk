@@ -34,6 +34,32 @@ type TestCluster struct {
 	Servers []TestServer
 }
 
+// WithTestCluster starts up a test cluster, runs the given function, and then stops the cluster.
+func WithTestCluster(t *testing.T, size int, stdout, stderr io.Writer, do func(t *testing.T, tc *TestCluster)) {
+	t.Helper()
+
+	tc, err := StartTestCluster(t, size, stdout, stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Stop() // nolint: errcheck
+
+	do(t, tc)
+}
+
+// WithConnectAll connects to a test cluster, runs the given function, and then closes the connection.
+func WithConnectAll(t *testing.T, tc *TestCluster, do func(t *testing.T, c *Conn, ech <-chan Event)) {
+	t.Helper()
+
+	c, ech, err := tc.ConnectAll()
+	if err != nil {
+		t.Fatalf("Connect returned error: %+v", err)
+	}
+	defer c.Close()
+
+	do(t, c, ech)
+}
+
 // TODO: pull this into its own package to allow for better isolation of integration tests vs. unit
 // testing. This should be used on CI systems and local only when needed whereas unit tests should remain
 // fast and not rely on external dependencies.
@@ -61,7 +87,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 
 	defer func() {
 		if !success {
-			cluster.Stop()
+			_ = cluster.Stop()
 		}
 	}()
 
@@ -148,7 +174,7 @@ func (tc *TestCluster) ConnectWithOptions(sessionTimeout time.Duration, options 
 
 func (tc *TestCluster) Stop() error {
 	for _, srv := range tc.Servers {
-		srv.Srv.Stop()
+		_ = srv.Srv.Stop()
 	}
 	defer os.RemoveAll(tc.Path)
 	return tc.waitForStop(5, time.Second)
@@ -202,7 +228,7 @@ func (tc *TestCluster) waitForStop(maxRetry int, interval time.Duration) error {
 func (tc *TestCluster) StartServer(server string) {
 	for _, s := range tc.Servers {
 		if strings.HasSuffix(server, fmt.Sprintf(":%d", s.Port)) {
-			s.Srv.Start()
+			_ = s.Srv.Start()
 			return
 		}
 	}
@@ -212,7 +238,7 @@ func (tc *TestCluster) StartServer(server string) {
 func (tc *TestCluster) StopServer(server string) {
 	for _, s := range tc.Servers {
 		if strings.HasSuffix(server, fmt.Sprintf(":%d", s.Port)) {
-			s.Srv.Stop()
+			_ = s.Srv.Stop()
 			return
 		}
 	}
@@ -234,14 +260,16 @@ func (tc *TestCluster) StartAllServers() error {
 }
 
 func (tc *TestCluster) StopAllServers() error {
-	var err error
+	var errs []error
 	for _, s := range tc.Servers {
 		if err := s.Srv.Stop(); err != nil {
-			err = fmt.Errorf("failed to stop server listening on port `%d` : %v", s.Port, err)
+			errs = append(errs, fmt.Errorf("failed to stop server listening on port `%d` : %v", s.Port, err))
 		}
 	}
-	if err != nil {
-		return err
+	if len(errs) == 1 {
+		return errs[0]
+	} else if len(errs) > 1 {
+		return fmt.Errorf("failed to stop all servers: %v", errs)
 	}
 
 	if err := tc.waitForStop(5, time.Second); err != nil {

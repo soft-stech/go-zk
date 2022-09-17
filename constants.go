@@ -18,8 +18,8 @@ const (
 	opExists          = 3
 	opGetData         = 4
 	opSetData         = 5
-	opGetAcl          = 6
-	opSetAcl          = 7
+	opGetACL          = 6
+	opSetACL          = 7
 	opGetChildren     = 8
 	opSync            = 9
 	opPing            = 11
@@ -179,7 +179,7 @@ var (
 	ErrReconfigDisabled        = errors.New("attempts to perform a reconfiguration operation when reconfiguration feature is disabled")
 	ErrBadArguments            = errors.New("invalid arguments")
 	ErrNoWatcher               = errors.New("watcher does not exist")
-	// ErrInvalidCallback         = errors.New("zk: invalid callback specified")
+	ErrInvalidCallback         = errors.New("zk: invalid callback specified")
 
 	errCodeToError = map[ErrCode]error{
 		0:                          nil,
@@ -191,15 +191,15 @@ var (
 		errNodeExists:              ErrNodeExists,
 		errNotEmpty:                ErrNotEmpty,
 		errSessionExpired:          ErrSessionExpired,
-		// errInvalidCallback:         ErrInvalidCallback,
-		errInvalidAcl:        ErrInvalidACL,
-		errAuthFailed:        ErrAuthFailed,
-		errClosing:           ErrClosing,
-		errNothing:           ErrNothing,
-		errSessionMoved:      ErrSessionMoved,
-		errZReconfigDisabled: ErrReconfigDisabled,
-		errBadArguments:      ErrBadArguments,
-		errNoWatcher:         ErrNoWatcher,
+		errInvalidCallback:         ErrInvalidCallback,
+		errInvalidAcl:              ErrInvalidACL,
+		errAuthFailed:              ErrAuthFailed,
+		errClosing:                 ErrClosing,
+		errNothing:                 ErrNothing,
+		errSessionMoved:            ErrSessionMoved,
+		errZReconfigDisabled:       ErrReconfigDisabled,
+		errBadArguments:            ErrBadArguments,
+		errNoWatcher:               ErrNoWatcher,
 	}
 )
 
@@ -211,17 +211,17 @@ func (e ErrCode) toError() error {
 }
 
 const (
-	errOk = 0
+	errOk ErrCode = 0
 	// System and server-side errors
-	errSystemError          = -1
-	errRuntimeInconsistency = -2
-	errDataInconsistency    = -3
-	errConnectionLoss       = -4
-	errMarshallingError     = -5
-	errUnimplemented        = -6
-	errOperationTimeout     = -7
-	errBadArguments         = -8
-	errInvalidState         = -9
+	errSystemError          ErrCode = -1 // nolint: unused
+	errRuntimeInconsistency ErrCode = -2 // nolint: unused
+	errDataInconsistency    ErrCode = -3 // nolint: unused
+	errConnectionLoss       ErrCode = -4 // nolint: unused
+	errMarshallingError     ErrCode = -5 // nolint: unused
+	errUnimplemented        ErrCode = -6 // nolint: unused
+	errOperationTimeout     ErrCode = -7 // nolint: unused
+	errBadArguments         ErrCode = -8
+	errInvalidState         ErrCode = -9 // nolint: unused
 	// API errors
 	errAPIError                ErrCode = -100
 	errNoNode                  ErrCode = -101 // *
@@ -232,7 +232,7 @@ const (
 	errNotEmpty                ErrCode = -111
 	errSessionExpired          ErrCode = -112
 	errInvalidCallback         ErrCode = -113
-	errInvalidAcl              ErrCode = -114
+	errInvalidAcl              ErrCode = -114 // nolint: revive, stylecheck
 	errAuthFailed              ErrCode = -115
 	errClosing                 ErrCode = -116
 	errNothing                 ErrCode = -117
@@ -264,8 +264,8 @@ var (
 		opExists:          "exists",
 		opGetData:         "getData",
 		opSetData:         "setData",
-		opGetAcl:          "getACL",
-		opSetAcl:          "setACL",
+		opGetACL:          "getACL",
+		opSetACL:          "setACL",
 		opGetChildren:     "getChildren",
 		opSync:            "sync",
 		opPing:            "ping",

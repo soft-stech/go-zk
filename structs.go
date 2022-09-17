@@ -162,7 +162,7 @@ type connectResponse struct {
 type CreateRequest struct {
 	Path  string
 	Data  []byte
-	Acl   []ACL
+	Acl   []ACL // nolint: revive, stylecheck
 	Flags int32
 }
 
@@ -171,25 +171,25 @@ type CreateContainerRequest CreateRequest
 type CreateTTLRequest struct {
 	Path  string
 	Data  []byte
-	Acl   []ACL
+	Acl   []ACL // nolint: revive, stylecheck
 	Flags int32
-	Ttl   int64 // ms
+	Ttl   int64 // nolint: revive, stylecheck
 }
 
 type createResponse pathResponse
 type DeleteRequest PathVersionRequest
 type deleteResponse struct{}
 
-type errorResponse struct {
-	Err int32
-}
+//type errorResponse struct {
+//	Err int32
+//}
 
 type existsRequest pathWatchRequest
 type existsResponse statResponse
-type getAclRequest pathRequest
+type getAclRequest pathRequest // nolint: revive, stylecheck
 
-type getAclResponse struct {
-	Acl  []ACL
+type getAclResponse struct { // nolint: revive, stylecheck
+	Acl  []ACL // nolint: revive, stylecheck
 	Stat Stat
 }
 
@@ -213,26 +213,27 @@ type getDataResponse struct {
 	Stat Stat
 }
 
-type getMaxChildrenRequest pathRequest
+//type getMaxChildrenRequest pathRequest
 
-type getMaxChildrenResponse struct {
-	Max int32
-}
+//type getMaxChildrenResponse struct {
+//	Max int32
+//}
 
-type getSaslRequest struct {
-	Token []byte
-}
+//type getSaslRequest struct {
+//	Token []byte
+//}
 
 type pingRequest struct{}
-type pingResponse struct{}
 
-type setAclRequest struct {
+//type pingResponse struct{}
+
+type setAclRequest struct { // nolint: revive, stylecheck
 	Path    string
-	Acl     []ACL
+	Acl     []ACL // nolint: revive, stylecheck
 	Version int32
 }
 
-type setAclResponse statResponse
+type setAclResponse statResponse // nolint: revive, stylecheck
 
 type addWatchRequest struct {
 	Path string
@@ -249,18 +250,18 @@ type SetDataRequest struct {
 
 type setDataResponse statResponse
 
-type setMaxChildren struct {
-	Path string
-	Max  int32
-}
+//type setMaxChildren struct {
+//	Path string
+//	Max  int32
+//}
 
-type setSaslRequest struct {
-	Token string
-}
+//type setSaslRequest struct {
+//	Token string
+//}
 
-type setSaslResponse struct {
-	Token string
-}
+//type setSaslResponse struct {
+//	Token string
+//}
 
 type setWatchesRequest struct {
 	RelativeZxid int64
@@ -269,7 +270,8 @@ type setWatchesRequest struct {
 	ChildWatches []string
 }
 
-type setWatchesResponse struct{}
+// This is unused - remove it?
+// type setWatchesResponse struct{}
 
 type setWatches2Request struct {
 	RelativeZxid               int64
@@ -321,7 +323,7 @@ type reconfigRequest struct {
 	NewMembers     []byte
 	// curConfigId version of the current configuration
 	// optional - causes reconfiguration to return an error if configuration is no longer current
-	CurConfigId int64
+	CurConfigId int64 // nolint: stylecheck, revive
 }
 
 type reconfigReponse getDataResponse
@@ -633,7 +635,7 @@ func requestStructForOp(op int32) interface{} {
 		return &DeleteRequest{}
 	case opExists:
 		return &existsRequest{}
-	case opGetAcl:
+	case opGetACL:
 		return &getAclRequest{}
 	case opGetChildren:
 		return &getChildrenRequest{}
@@ -643,7 +645,7 @@ func requestStructForOp(op int32) interface{} {
 		return &getDataRequest{}
 	case opPing:
 		return &pingRequest{}
-	case opSetAcl:
+	case opSetACL:
 		return &setAclRequest{}
 	case opSetData:
 		return &SetDataRequest{}

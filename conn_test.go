@@ -10,51 +10,50 @@ import (
 )
 
 func TestRecurringReAuthHang(t *testing.T) {
-	zkC, err := StartTestCluster(t, 3, ioutil.Discard, ioutil.Discard)
-	if err != nil {
-		panic(err)
-	}
-	defer zkC.Stop()
+	WithTestCluster(t, 3, ioutil.Discard, ioutil.Discard, func(t *testing.T, tc *TestCluster) {
+		WithConnectAll(t, tc, func(t *testing.T, c *Conn, ech <-chan Event) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
 
-	conn, evtC, err := zkC.ConnectAll()
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
+			if err := waitForSession(ctx, ech); err != nil {
+				t.Fatalf("failed to wait for session: %v", err)
+			}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
+			// Add auth.
+			if err := c.AddAuth("digest", []byte("test:test")); err != nil {
+				t.Fatalf("Failed to add auth %s", err)
+			}
 
-	waitForSession(ctx, evtC)
-	// Add auth.
-	conn.AddAuth("digest", []byte("test:test"))
+			var reauthCloseOnce sync.Once
+			reauthSig := make(chan struct{}, 1)
+			c.resendZkAuthFn = func(ctx context.Context, c *Conn) error {
+				// in current implimentation the reauth might be called more than once based on various conditions
+				reauthCloseOnce.Do(func() { close(reauthSig) })
+				return resendZkAuth(ctx, c)
+			}
 
-	var reauthCloseOnce sync.Once
-	reauthSig := make(chan struct{}, 1)
-	conn.resendZkAuthFn = func(ctx context.Context, c *Conn) error {
-		// in current implimentation the reauth might be called more than once based on various conditions
-		reauthCloseOnce.Do(func() { close(reauthSig) })
-		return resendZkAuth(ctx, c)
-	}
+			c.debugCloseRecvLoop = true
+			currentServer := c.Server()
+			tc.StopServer(currentServer)
+			// wait connect to new zookeeper.
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
 
-	conn.debugCloseRecvLoop = true
-	currentServer := conn.Server()
-	zkC.StopServer(currentServer)
-	// wait connect to new zookeeper.
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
+			if err := waitForSession(ctx, ech); err != nil {
+				t.Fatalf("failed to wait for session: %v", err)
+			}
 
-	waitForSession(ctx, evtC)
-
-	select {
-	case _, ok := <-reauthSig:
-		if !ok {
-			return // we closed the channel as expected
-		}
-		t.Fatal("reauth testing channel should have been closed")
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
+			select {
+			case _, ok := <-reauthSig:
+				if !ok {
+					return // we closed the channel as expected
+				}
+				t.Fatal("reauth testing channel should have been closed")
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	})
 }
 
 func TestConcurrentReadAndClose(t *testing.T) {

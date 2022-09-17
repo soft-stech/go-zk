@@ -250,21 +250,21 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 }
 
 // WithDialer returns a connection option specifying a non-default Dialer.
-func WithDialer(dialer Dialer) connOption {
+func WithDialer(dialer Dialer) connOption { // nolint:revive
 	return func(c *Conn) {
 		c.dialer = dialer
 	}
 }
 
 // WithHostProvider returns a connection option specifying a non-default HostProvider.
-func WithHostProvider(hostProvider HostProvider) connOption {
+func WithHostProvider(hostProvider HostProvider) connOption { // nolint:revive
 	return func(c *Conn) {
 		c.hostProvider = hostProvider
 	}
 }
 
 // WithLogger returns a connection option specifying a non-default Logger.
-func WithLogger(logger Logger) connOption {
+func WithLogger(logger Logger) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.logger = logger
 	}
@@ -272,7 +272,7 @@ func WithLogger(logger Logger) connOption {
 
 // WithLogInfo returns a connection option specifying whether or not information messages
 // should be logged.
-func WithLogInfo(logInfo bool) connOption {
+func WithLogInfo(logInfo bool) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.logInfo = logInfo
 	}
@@ -284,7 +284,7 @@ type EventCallback func(Event)
 // WithEventCallback returns a connection option that specifies an event
 // callback.
 // The callback must not block - doing so would delay the ZK go routines.
-func WithEventCallback(cb EventCallback) connOption {
+func WithEventCallback(cb EventCallback) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.eventCallback = cb
 	}
@@ -314,7 +314,7 @@ func WithEventCallback(cb EventCallback) connOption {
 // the child names without an increased buffer size in the client, but they work
 // by inspecting the servers' transaction logs to enumerate children instead of
 // sending an online request to a server.
-func WithMaxBufferSize(maxBufferSize int) connOption {
+func WithMaxBufferSize(maxBufferSize int) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.maxBufferSize = maxBufferSize
 	}
@@ -324,7 +324,7 @@ func WithMaxBufferSize(maxBufferSize int) connOption {
 // packets to Zookeeper server. The standard Zookeeper client for java defaults
 // to a limit of 1mb. This option should be used for non-standard server setup
 // where znode is bigger than default 1mb.
-func WithMaxConnBufferSize(maxBufferSize int) connOption {
+func WithMaxConnBufferSize(maxBufferSize int) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.buf = make([]byte, maxBufferSize)
 	}
@@ -732,17 +732,17 @@ func (c *Conn) authenticate() error {
 
 	binary.BigEndian.PutUint32(buf[:4], uint32(n))
 
-	c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout * 10))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout * 10))
 	_, err = c.conn.Write(buf[:n+4])
-	c.conn.SetWriteDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		return err
 	}
 
 	// Receive and decode a connect response.
-	c.conn.SetReadDeadline(time.Now().Add(c.recvTimeout * 10))
+	_ = c.conn.SetReadDeadline(time.Now().Add(c.recvTimeout * 10))
 	_, err = io.ReadFull(c.conn, buf[:4])
-	c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return err
 	}
@@ -811,9 +811,9 @@ func (c *Conn) sendData(req *request) error {
 	c.requests[req.xid] = req
 	c.requestsLock.Unlock()
 
-	c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout))
 	_, err = c.conn.Write(c.buf[:n+4])
-	c.conn.SetWriteDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		req.recvChan <- response{-1, err}
 		c.conn.Close()
@@ -841,9 +841,9 @@ func (c *Conn) sendLoop() error {
 
 			binary.BigEndian.PutUint32(c.buf[:4], uint32(n))
 
-			c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout))
 			_, err = c.conn.Write(c.buf[:n+4])
-			c.conn.SetWriteDeadline(time.Time{})
+			_ = c.conn.SetWriteDeadline(time.Time{})
 			if err != nil {
 				c.conn.Close()
 				return err
@@ -879,7 +879,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 		}
 
 		_, err = io.ReadFull(conn, buf[:blen])
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return err
 		}
@@ -1380,7 +1380,7 @@ func (c *Conn) GetACL(path string) ([]ACL, *Stat, error) {
 	}
 
 	res := &getAclResponse{}
-	_, err := c.request(opGetAcl, &getAclRequest{Path: path}, res, nil)
+	_, err := c.request(opGetACL, &getAclRequest{Path: path}, res, nil)
 	if err == ErrConnectionClosed {
 		return nil, nil, err
 	}
@@ -1394,7 +1394,7 @@ func (c *Conn) SetACL(path string, acl []ACL, version int32) (*Stat, error) {
 	}
 
 	res := &setAclResponse{}
-	_, err := c.request(opSetAcl, &setAclRequest{Path: path, Acl: acl, Version: version}, res, nil)
+	_, err := c.request(opSetACL, &setAclRequest{Path: path, Acl: acl, Version: version}, res, nil)
 	if err == ErrConnectionClosed {
 		return nil, err
 	}

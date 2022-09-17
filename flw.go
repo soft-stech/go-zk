@@ -217,8 +217,8 @@ func FLWCons(servers []string, timeout time.Duration) ([]*ServerClients, bool) {
 				Received:      recvd,
 				Sent:          sent,
 				SessionID:     sid,
-				Lcxid:         int64(lcxid),
-				Lzxid:         int64(lzxid),
+				Lcxid:         lcxid,
+				Lzxid:         lzxid,
 				Timeout:       int32(timeout),
 				LastLatency:   int32(llat),
 				MinLatency:    int32(minlat),
@@ -256,12 +256,12 @@ func fourLetterWord(server, command string, timeout time.Duration) ([]byte, erro
 	// once the command has been processed, but better safe than sorry
 	defer conn.Close()
 
-	conn.SetWriteDeadline(time.Now().Add(timeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 	_, err = conn.Write([]byte(command))
 	if err != nil {
 		return nil, err
 	}
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
-	conn.SetReadDeadline(time.Now().Add(timeout))
 	return ioutil.ReadAll(conn)
 }

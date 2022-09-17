@@ -37,12 +37,15 @@ func NewCachedLeavesWalker(conn *Conn, path string) (*CachedLeavesWalker, error)
 	}
 
 	go w.eventLoop()
-	if err = w.conn.WalkLeavesParallel(path, func(p string, stat *Stat) error {
-		w.lock.Lock()
-		w.tree.ensurePathPresent(p)
-		w.lock.Unlock()
-		return nil
-	}); err != nil {
+	if err = conn.TreeWalker(path).
+		BreadthFirstParallel().
+		LeavesOnly().
+		Walk(func(p string, _ *Stat) error {
+			w.lock.Lock()
+			w.tree.ensurePathPresent(p)
+			w.lock.Unlock()
+			return nil
+		}); err != nil {
 		if cerr := w.Close(); cerr != nil {
 			w.conn.logger.Printf("failed to close CachedLeavesWalker: %v", cerr)
 		}

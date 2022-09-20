@@ -4,9 +4,12 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"math/rand"
+	"net"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -116,4 +119,18 @@ func validatePath(path string, isSequential bool) error {
 		w = width
 	}
 	return nil
+}
+
+func writeWithDeadline(conn net.Conn, b []byte, timeout time.Duration) (int, error) {
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+	n, err := conn.Write(b)
+	_ = conn.SetWriteDeadline(time.Time{})
+	return n, err
+}
+
+func readFullWithDeadline(conn net.Conn, b []byte, timeout time.Duration) (int, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	n, err := io.ReadFull(conn, b)
+	_ = conn.SetReadDeadline(time.Time{})
+	return n, err
 }

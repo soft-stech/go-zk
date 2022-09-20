@@ -308,23 +308,23 @@ func connHandler(conn net.Conn, thing string) {
 		case "dead":
 			return
 		default:
-			conn.Write([]byte("imok"))
+			_, _ = conn.Write([]byte("imok"))
 		}
 	case "srvr":
 		switch thing {
 		case "dead":
 			return
 		default:
-			conn.Write([]byte(zkSrvrOut))
+			_, _ = conn.Write([]byte(zkSrvrOut))
 		}
 	case "cons":
 		switch thing {
 		case "dead":
 			return
 		default:
-			conn.Write([]byte(zkConsOut))
+			_, _ = conn.Write([]byte(zkConsOut))
 		}
 	default:
-		conn.Write([]byte("This ZooKeeper instance is not currently serving requests."))
+		_, _ = conn.Write([]byte("This ZooKeeper instance is not currently serving requests."))
 	}
 }

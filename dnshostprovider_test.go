@@ -9,45 +9,41 @@ import (
 
 // localhostLookupHost is a test replacement for net.LookupHost that
 // always returns 127.0.0.1
-func localhostLookupHost(host string) ([]string, error) {
+func localhostLookupHost(_ string) ([]string, error) {
 	return []string{"127.0.0.1"}, nil
 }
 
 // TestDNSHostProviderCreate is just like TestCreate, but with an
 // overridden HostProvider that ignores the provided hostname.
 func TestDNSHostProviderCreate(t *testing.T) {
-	ts, err := StartTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Stop()
+	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		port := tc.Servers[0].Port
+		server := fmt.Sprintf("foo.example.com:%d", port)
+		hostProvider := &DNSHostProvider{lookupHost: localhostLookupHost}
+		c, _, err := Connect([]string{server}, time.Second*15, WithHostProvider(hostProvider))
+		if err != nil {
+			t.Fatalf("Connect returned error: %+v", err)
+		}
+		defer c.Close()
 
-	port := ts.Servers[0].Port
-	server := fmt.Sprintf("foo.example.com:%d", port)
-	hostProvider := &DNSHostProvider{lookupHost: localhostLookupHost}
-	zk, _, err := Connect([]string{server}, time.Second*15, WithHostProvider(hostProvider))
-	if err != nil {
-		t.Fatalf("Connect returned error: %+v", err)
-	}
-	defer zk.Close()
+		path := "/gozk-test"
 
-	path := "/gozk-test"
-
-	if err := zk.Delete(path, -1); err != nil && err != ErrNoNode {
-		t.Fatalf("Delete returned error: %+v", err)
-	}
-	if p, err := zk.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-		t.Fatalf("Create returned error: %+v", err)
-	} else if p != path {
-		t.Fatalf("Create returned different path '%s' != '%s'", p, path)
-	}
-	if data, stat, err := zk.Get(path); err != nil {
-		t.Fatalf("Get returned error: %+v", err)
-	} else if stat == nil {
-		t.Fatal("Get returned nil stat")
-	} else if len(data) < 4 {
-		t.Fatal("Get returned wrong size data")
-	}
+		if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			t.Fatalf("Delete returned error: %+v", err)
+		}
+		if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if p != path {
+			t.Fatalf("Create returned different path '%s' != '%s'", p, path)
+		}
+		if data, stat, err := c.Get(path); err != nil {
+			t.Fatalf("Get returned error: %+v", err)
+		} else if stat == nil {
+			t.Fatal("Get returned nil stat")
+		} else if len(data) < 4 {
+			t.Fatal("Get returned wrong size data")
+		}
+	})
 }
 
 // localHostPortsFacade wraps a HostProvider, remapping the
@@ -97,72 +93,68 @@ var _ HostProvider = &localHostPortsFacade{}
 // remaps addresses to localhost:$PORT combinations corresponding to
 // the test ZooKeeper instances.
 func TestDNSHostProviderReconnect(t *testing.T) {
-	ts, err := StartTestCluster(t, 3, nil, logWriter{t: t, p: "[ZKERR] "})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ts.Stop()
-
-	innerHp := &DNSHostProvider{lookupHost: func(host string) ([]string, error) {
-		return []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}, nil
-	}}
-	ports := make([]int, 0, len(ts.Servers))
-	for _, server := range ts.Servers {
-		ports = append(ports, server.Port)
-	}
-	hp := newLocalHostPortsFacade(innerHp, ports)
-
-	zk, _, err := Connect([]string{"foo.example.com:12345"}, time.Second, WithHostProvider(hp))
-	if err != nil {
-		t.Fatalf("Connect returned error: %+v", err)
-	}
-	defer zk.Close()
-
-	path := "/gozk-test"
-
-	// Initial operation to force connection.
-	if err := zk.Delete(path, -1); err != nil && err != ErrNoNode {
-		t.Fatalf("Delete returned error: %+v", err)
-	}
-
-	// Figure out which server we're connected to.
-	currentServer := zk.Server()
-	t.Logf("Connected to %q. Finding test server index…", currentServer)
-	serverIndex := -1
-	for i, server := range ts.Servers {
-		server := fmt.Sprintf("localhost:%d", server.Port)
-		t.Logf("…trying %q", server)
-		if currentServer == server {
-			serverIndex = i
-			t.Logf("…found at index %d", i)
-			break
+	WithTestCluster(t, 3, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		innerHp := &DNSHostProvider{lookupHost: func(host string) ([]string, error) {
+			return []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}, nil
+		}}
+		ports := make([]int, 0, len(tc.Servers))
+		for _, server := range tc.Servers {
+			ports = append(ports, server.Port)
 		}
-	}
-	if serverIndex == -1 {
-		t.Fatalf("Cannot determine test server index.")
-	}
+		hp := newLocalHostPortsFacade(innerHp, ports)
 
-	// Restart the connected server.
-	ts.Servers[serverIndex].Srv.Stop()
-	ts.Servers[serverIndex].Srv.Start()
+		c, _, err := Connect([]string{"foo.example.com:12345"}, time.Second, WithHostProvider(hp))
+		if err != nil {
+			t.Fatalf("Connect returned error: %+v", err)
+		}
+		defer c.Close()
 
-	// Continue with the basic TestCreate tests.
-	if p, err := zk.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-		t.Fatalf("Create returned error: %+v", err)
-	} else if p != path {
-		t.Fatalf("Create returned different path '%s' != '%s'", p, path)
-	}
-	if data, stat, err := zk.Get(path); err != nil {
-		t.Fatalf("Get returned error: %+v", err)
-	} else if stat == nil {
-		t.Fatal("Get returned nil stat")
-	} else if len(data) < 4 {
-		t.Fatal("Get returned wrong size data")
-	}
+		path := "/gozk-test"
 
-	if zk.Server() == currentServer {
-		t.Errorf("Still connected to %q after restart.", currentServer)
-	}
+		// Initial operation to force connection.
+		if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			t.Fatalf("Delete returned error: %+v", err)
+		}
+
+		// Figure out which server we're connected to.
+		currentServer := c.Server()
+		t.Logf("Connected to %q. Finding test server index…", currentServer)
+		serverIndex := -1
+		for i, server := range tc.Servers {
+			server := fmt.Sprintf("localhost:%d", server.Port)
+			t.Logf("…trying %q", server)
+			if currentServer == server {
+				serverIndex = i
+				t.Logf("…found at index %d", i)
+				break
+			}
+		}
+		if serverIndex == -1 {
+			t.Fatalf("Cannot determine test server index.")
+		}
+
+		// Restart the connected server.
+		_ = tc.Servers[serverIndex].Srv.Stop()
+		_ = tc.Servers[serverIndex].Srv.Start()
+
+		// Continue with the basic TestCreate tests.
+		if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+			t.Fatalf("Create returned error: %+v", err)
+		} else if p != path {
+			t.Fatalf("Create returned different path '%s' != '%s'", p, path)
+		}
+		if data, stat, err := c.Get(path); err != nil {
+			t.Fatalf("Get returned error: %+v", err)
+		} else if stat == nil {
+			t.Fatal("Get returned nil stat")
+		} else if len(data) < 4 {
+			t.Fatal("Get returned wrong size data")
+		}
+
+		if c.Server() == currentServer {
+			t.Errorf("Still connected to %q after restart.", currentServer)
+		}
+	})
 }
 
 // TestDNSHostProviderRetryStart tests the `retryStart` functionality

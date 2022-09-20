@@ -26,12 +26,24 @@ zookeeper: $(ZK)
 	ln -s $(ZK) zookeeper
 
 .PHONY: setup
-setup: zookeeper
+setup: zookeeper tools
+
+.PHONY: tools
+tools: tools/tools.go tools/go.mod
+	mkdir -p "tools/bin"
+	cd tools && go build -o bin/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint && cd ..
 
 .PHONY: lint
-lint:
+lint: tools
 	go fmt ./...
 	go vet ./...
+	tools/bin/golangci-lint run -v --deadline 10m
+
+.PHONY: lint-fix
+lint-fix: tools
+	go fmt ./...
+	go vet ./...
+	tools/bin/golangci-lint run -v --deadline 10m --fix
 
 .PHONY: build
 build:
@@ -49,3 +61,4 @@ clean:
 	rm -rf zookeeper-*/
 	rm -f zookeeper
 	rm -f profile.cov
+	rm -rf tools/bin

@@ -35,7 +35,7 @@ type server struct {
 	cancelFunc context.CancelFunc
 }
 
-func NewIntegrationTestServer(t *testing.T, configPath string, stdout, stderr io.Writer) (*server, error) {
+func NewIntegrationTestServer(t *testing.T, configPath string, stdout, stderr io.Writer) (*server, error) { // nolint: revive
 	// allow external systems to configure this zk server bin path.
 	zkPath := os.Getenv("ZOOKEEPER_BIN_PATH")
 	if zkPath == "" {

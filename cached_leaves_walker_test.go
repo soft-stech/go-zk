@@ -84,8 +84,6 @@ func TestCachedLeavesTreeNode(t *testing.T) {
 			if !reflect.DeepEqual(visisted, tc.expectedLeavesDelete) {
 				t.Errorf("deleteTree: Expected visisted=%+v, got %+v", tc.expectedLeavesDelete, visisted)
 			}
-
 		}
 	}
-
 }

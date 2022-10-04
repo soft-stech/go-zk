@@ -17,13 +17,10 @@ import (
 	"fmt"
 	"io"
 	"net"
-	gopath "path"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // ErrNoServer indicates that an operation cannot be completed
@@ -1676,103 +1673,45 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 	return nil
 }
 
-// WalkBreadthFirst walks down the children of a given path, depth first.
+// TreeWalker returns an object that is used to traverse the tree of nodes rooted at the given path.
+func (c *Conn) TreeWalker(path string) TreeWalker {
+	return InitTreeWalker(c.ChildrenCtx, path)
+}
+
+// WalkDepthFirst walks down the children of a given path, depth first.
+// Deprecated: use TreeWalker method instead.
 func (c *Conn) WalkDepthFirst(path string, includeSelf bool, visitor func(p string, stat *Stat) error) error {
-	children, stat, err := c.Children(path)
-	if err != nil {
-		if err == ErrNoNode {
-			return nil // Ignore ErrNoNode.
-		}
-		return err
-	}
-
-	for _, child := range children {
-		if err = c.WalkDepthFirst(gopath.Join(path, child), true, visitor); err != nil {
-			return err
-		}
-	}
-
-	if includeSelf {
-		if err = visitor(path, stat); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.TreeWalker(path).
+		DepthFirst().
+		IncludeRoot(includeSelf).
+		Walk(visitor)
 }
 
 // WalkBreadthFirst walks down the children of a given path, breadth first.
+// Deprecated: use TreeWalker method instead.
 func (c *Conn) WalkBreadthFirst(path string, includeSelf bool, visitor func(p string, stat *Stat) error) error {
-	children, stat, err := c.Children(path)
-	if err != nil {
-		if err == ErrNoNode {
-			return nil // Ignore ErrNoNode.
-		}
-		return err
-	}
-
-	if includeSelf {
-		if err = visitor(path, stat); err != nil {
-			return err
-		}
-	}
-
-	for _, child := range children {
-		if err = c.WalkBreadthFirst(gopath.Join(path, child), true, visitor); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.TreeWalker(path).
+		BreadthFirst().
+		IncludeRoot(includeSelf).
+		Walk(visitor)
 }
 
 // WalkLeaves walks amongst a given path leaves, a leaf is a znode with no children.
+// Deprecated: use TreeWalker method instead.
 func (c *Conn) WalkLeaves(path string, visitor func(p string, stat *Stat) error) error {
-	children, stat, err := c.Children(path)
-	if err != nil {
-		if err == ErrNoNode {
-			return nil // Ignore ErrNoNode.
-		}
-		return err
-	}
-
-	if stat.NumChildren == 0 {
-		// Found a leaf.
-		return visitor(path, stat)
-	}
-
-	for _, child := range children {
-		if err = c.WalkLeaves(gopath.Join(path, child), visitor); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.TreeWalker(path).
+		BreadthFirst().
+		LeavesOnly().
+		Walk(visitor)
 }
 
-// WalkLeaves walks amongst a given path leaves, like WalkLeaves
+// WalkLeavesParallel walks amongst a given path leaves, like WalkLeaves
 // Except it will use goroutines to crawl childrens
 // Which means the `visitor` function may be called in parallel, mind your thread safety.
+// Deprecated: use TreeWalker method instead.
 func (c *Conn) WalkLeavesParallel(path string, visitor func(p string, stat *Stat) error) error {
-	children, stat, err := c.Children(path)
-	if err != nil {
-		if err == ErrNoNode {
-			return nil // Ignore ErrNoNode.
-		}
-		return err
-	}
-
-	if stat.NumChildren == 0 {
-		// Found a leaf.
-		return visitor(path, stat)
-	}
-
-	eg, _ := errgroup.WithContext(context.Background())
-	for _, child := range children {
-		leavePath := gopath.Join(path, child)
-		eg.Go(func() error {
-			return c.WalkLeavesParallel(leavePath, visitor)
-		})
-	}
-	return eg.Wait()
+	return c.TreeWalker(path).
+		BreadthFirstParallel().
+		LeavesOnly().
+		Walk(visitor)
 }

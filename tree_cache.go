@@ -137,6 +137,25 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 		_ = tc.conn.RemoveWatch(watchCh)
 	}()
 
+	// Temporary workaround for race condition on Events vs Get answers
+	// FIXME: replace with a better data structure
+	watchBuffer := make(chan Event, 10240)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				close(watchBuffer)
+				return
+			case e := <-watchCh:
+				select {
+				case watchBuffer <- e:
+				default:
+					tc.logger.Printf("watchBuffer is full, skip event: %+v", e)
+				}
+			}
+		}
+	}()
+
 	// Populate a new tree with a parallel, breadth-first traversal.
 	// We won't touch the existing tree until we're done, after which we'll atomically swap it.
 	newRoot := newTreeCacheNode("", &Stat{}, nil)
@@ -191,7 +210,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	// Process watch events until the context is canceled, watching is stopped, or an error occurs.
 	for {
 		select {
-		case e, ok := <-watchCh:
+		case e, ok := <-watchBuffer:
 			if !ok {
 				return fmt.Errorf("watch channel closed unexpectedly")
 			}

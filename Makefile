@@ -1,8 +1,15 @@
+
+REPO_ROOT = $(shell pwd -P)
+TOOLS_BINDIR = $(REPO_ROOT)/tools/bin
+GOTESTSUM_BIN = $(TOOLS_BINDIR)/gotestsum
+GOLANGCI_LINT_BIN ?= $(TOOLS_BINDIR)/golangci-lint
+
+PACKAGES := $(shell go list ./... | grep -v examples)
+
 # make file to hold the logic of build and test setup
 ZK_VERSION ?= 3.6.2
 
-# Apache changed the name of the archive in version 3.5.x and seperated out
-# src and binary packages
+# Apache changed the name of the archive in version 3.5.x and seperated out src and binary packages
 ZK_MINOR_VER=$(word 2, $(subst ., ,$(ZK_VERSION)))
 ifeq ($(shell test $(ZK_MINOR_VER) -le 4; echo $$?),0)
   ZK = zookeeper-$(ZK_VERSION)
@@ -10,8 +17,6 @@ else
   ZK = apache-zookeeper-$(ZK_VERSION)-bin
 endif
 ZK_URL = "https://archive.apache.org/dist/zookeeper/zookeeper-$(ZK_VERSION)/$(ZK).tar.gz"
-
-PACKAGES := $(shell go list ./... | grep -v examples)
 
 .DEFAULT_GOAL := test
 
@@ -30,28 +35,33 @@ setup: zookeeper tools
 
 .PHONY: tools
 tools: tools/tools.go tools/go.mod
-	mkdir -p "tools/bin"
-	cd tools && go build -o bin/golangci-lint github.com/golangci/golangci-lint/cmd/golangci-lint && cd ..
+	mkdir -p "$(TOOLS_BINDIR)"
+	cd tools && \
+		export GOBIN="${TOOLS_BINDIR}" && \
+		go install \
+			github.com/golangci/golangci-lint/cmd/golangci-lint \
+			gotest.tools/gotestsum && \
+		cd ..
 
 .PHONY: lint
 lint: tools
 	go fmt ./...
 	go vet ./...
-	tools/bin/golangci-lint run -v --deadline 10m
+	$(GOLANGCI_LINT_BIN) run -v --deadline 10m
 
 .PHONY: lint-fix
 lint-fix: tools
 	go fmt ./...
 	go vet ./...
-	tools/bin/golangci-lint run -v --deadline 10m --fix
+	$(GOLANGCI_LINT_BIN) run -v --deadline 10m --fix
 
 .PHONY: build
 build:
 	go build ./...
 
 .PHONY: test
-test: build zookeeper
-	go test -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
+test: tools build zookeeper
+	$(GOTESTSUM_BIN) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
 
 .PHONY: clean
 clean:

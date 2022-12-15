@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
@@ -182,7 +181,7 @@ func TestIncrementalReconfig(t *testing.T) {
 
 	WithTestCluster(t, 3, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		// start and add a new server.
-		tmpPath, err := ioutil.TempDir("", "gozk")
+		tmpPath, err := os.MkdirTemp("", "gozk")
 		requireNoError(t, err, "failed to create tmp dir for test server setup")
 		defer os.RemoveAll(tmpPath)
 

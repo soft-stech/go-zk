@@ -3,14 +3,14 @@ package zk
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestRecurringReAuthHang(t *testing.T) {
-	WithTestCluster(t, 3, ioutil.Discard, ioutil.Discard, func(t *testing.T, tc *TestCluster) {
+	WithTestCluster(t, 3, io.Discard, io.Discard, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, ech <-chan Event) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()

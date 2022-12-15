@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
@@ -263,5 +263,5 @@ func fourLetterWord(server, command string, timeout time.Duration) ([]byte, erro
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
-	return ioutil.ReadAll(conn)
+	return io.ReadAll(conn)
 }

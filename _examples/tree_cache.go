@@ -14,7 +14,7 @@ func main() {
 		panic(err)
 	}
 
-	cache := zk.NewTreeCache(c, "/foo", true)
+	cache := zk.NewTreeCache(c, "/foo", zk.TreeCacheIncludeData(true))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -146,7 +146,11 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 			case <-ctx.Done():
 				close(watchBuffer)
 				return
-			case e := <-watchCh:
+			case e, ok := <-watchCh:
+				if !ok {
+					tc.logger.Printf("watchBuffer channel closed unexpectedly")
+					return
+				}
 				select {
 				case watchBuffer <- e:
 				default:

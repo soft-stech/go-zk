@@ -45,7 +45,6 @@ tools: tools/tools.go tools/go.mod
 
 .PHONY: lint
 lint: tools
-	go fmt ./...
 	go vet ./...
 	$(GOLANGCI_LINT_BIN) run -v --deadline 10m
 
@@ -61,7 +60,7 @@ build:
 
 .PHONY: test
 test: tools build zookeeper
-	$(GOTESTSUM_BIN) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
+	ZK_VERSION=$(ZK_VERSION) $(GOTESTSUM_BIN) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
 
 .PHONY: clean
 clean:

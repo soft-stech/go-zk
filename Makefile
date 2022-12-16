@@ -45,7 +45,6 @@ tools: tools/tools.go tools/go.mod
 
 .PHONY: lint
 lint: tools
-	go fmt ./...
 	go vet ./...
 	$(GOLANGCI_LINT_BIN) run -v --deadline 10m
 

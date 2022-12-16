@@ -3,7 +3,6 @@ package zk
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -78,7 +77,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 		}
 	}
 
-	tmpPath, err := ioutil.TempDir("", "gozk")
+	tmpPath, err := os.MkdirTemp("", "gozk")
 	requireNoError(t, err, "failed to create tmp dir for test server setup")
 
 	success := false

@@ -193,6 +193,9 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 				t.Fatalf("cache node /child1/child1_1 not found")
 			}
 			found, _, err = cache.Exists("/foo")
+			if err != nil {
+				t.Fatalf("failed to exists /foo: %v", err)
+			}
 			if found {
 				t.Fatalf("cache node /foo found")
 			}
@@ -214,12 +217,15 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 			// Walking from root.
 			var visited []string
 			walker := cache.Walker("/")
-			walker.IncludeRoot(true).
+			err = walker.IncludeRoot(true).
 				DepthFirst().
 				Walk(func(path string, stat *Stat) error {
 					visited = append(visited, path)
 					return nil
 				})
+			if err != nil {
+				t.Fatalf("failed to walk: %v", err)
+			}
 			sort.Strings(visited) // For consistency.
 			if len(visited) != 5 {
 				t.Fatalf("cache walker visited mismatch: expected %d, got %d", 5, len(visited))
@@ -347,12 +353,15 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 			// Walking from root.
 			var visited []string
 			walker := cache.Walker("/test-tree-cache")
-			walker.IncludeRoot(true).
+			err = walker.IncludeRoot(true).
 				DepthFirst().
 				Walk(func(path string, stat *Stat) error {
 					visited = append(visited, path)
 					return nil
 				})
+			if err != nil {
+				t.Fatalf("failed to walk: %v", err)
+			}
 			sort.Strings(visited) // For consistency.
 			if len(visited) != 5 {
 				t.Fatalf("cache walker visited mismatch: expected %d, got %d", 5, len(visited))

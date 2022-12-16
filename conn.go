@@ -35,39 +35,11 @@ var ErrInvalidPath = errors.New("zk: invalid path")
 var DefaultLogger Logger = defaultLogger{}
 
 const (
-	bufferSize              = 1536 * 1024
-	eventChanSize           = 6
-	sendChanSize            = 16
-	watchChanSize           = 2
-	persistentWatchChanSize = 8
-	protectedPrefix         = "_c_"
+	bufferSize      = 1536 * 1024
+	eventChanSize   = 6
+	sendChanSize    = 16
+	protectedPrefix = "_c_"
 )
-
-const (
-	watchTypeData watchType = iota
-	watchTypeExist
-	watchTypeChild
-	watchTypePersistent
-	watchTypePersistentRecursive
-)
-
-type watchType int
-
-func (wt watchType) WatcherType() WatcherType {
-	switch wt {
-	case watchTypeData:
-		return WatcherTypeData
-	case watchTypeChild:
-		return WatcherTypeChildren
-	default:
-		return WatcherTypeAny
-	}
-}
-
-type watchPathType struct {
-	path  string
-	wType watchType
-}
 
 // Dialer is a function to be used to establish a connection to a single host.
 type Dialer func(network, address string, timeout time.Duration) (net.Conn, error)
@@ -108,13 +80,12 @@ type Conn struct {
 	creds   []authCreds
 	credsMu sync.Mutex // protects server
 
-	sendChan     chan *request
-	requests     map[int32]*request // Xid -> pending request
-	requestsLock sync.Mutex
-	watchers     map[watchPathType][]chan Event
-	recWatchers  map[watchPathType][]chan Event
-	watchersLock sync.Mutex
-	closeChan    chan struct{} // channel to tell send loop stop
+	sendChan      chan *request
+	requests      map[int32]*request // Xid -> pending request
+	requestsLock  sync.Mutex
+	watchersByKey map[watcherKey][]watcher
+	watchersLock  sync.Mutex
+	closeChan     chan struct{} // channel to tell send loop stop
 
 	// Debug (used by unit tests)
 	reconnectLatch   chan struct{}
@@ -215,8 +186,7 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		connectTimeout: 1 * time.Second,
 		sendChan:       make(chan *request, sendChanSize),
 		requests:       make(map[int32]*request),
-		watchers:       make(map[watchPathType][]chan Event),
-		recWatchers:    make(map[watchPathType][]chan Event),
+		watchersByKey:  make(map[watcherKey][]watcher),
 		passwd:         emptyPassword,
 		logger:         DefaultLogger,
 		logInfo:        true, // default is true for backwards compatability
@@ -239,7 +209,7 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 	go func() {
 		conn.loop(ctx)
 		conn.flushRequests(ErrClosing)
-		conn.invalidateWatches(ErrClosing)
+		conn.invalidateWatchers(ErrClosing)
 		close(conn.eventChan)
 	}()
 
@@ -505,12 +475,13 @@ func (c *Conn) loop(ctx context.Context) {
 				}
 			}()
 
-			c.sendSetWatches()
+			c.restoreWatches()
 			wg.Wait()
 		}
 
-		c.setState(StateDisconnected)
 		disconnectTime = time.Now()
+		c.setState(StateDisconnected)
+		c.invalidateWatchersOnDisconnect()
 
 		select {
 		case <-c.shouldQuit:
@@ -556,160 +527,190 @@ func (c *Conn) flushRequests(err error) {
 }
 
 // Send event to all interested watchers
-func (c *Conn) notifyWatches(ev Event) {
-	wTypes := []watchType{watchTypePersistent}
-	switch ev.Type {
-	case EventNodeCreated:
-		wTypes = append(wTypes, watchTypeExist)
-	case EventNodeDataChanged:
-		wTypes = append(wTypes, watchTypeExist, watchTypeData)
-	case EventNodeChildrenChanged:
-		wTypes = append(wTypes, watchTypeChild)
-	case EventNodeDeleted:
-		wTypes = append(wTypes, watchTypeExist, watchTypeData, watchTypeChild)
-	}
+func (c *Conn) notifyWatchers(ev Event) {
+	// Walk through all watchers and collect the ones interested in this event.
+	var persistentWatchers []watcher
+	var nonPersistentWatchers []watcher
+	func() {
+		c.watchersLock.Lock()
+		defer c.watchersLock.Unlock()
 
-	c.watchersLock.Lock()
-	defer c.watchersLock.Unlock()
-
-	// Handle non-recursive watches.
-	for _, t := range wTypes {
-		wpt := watchPathType{ev.Path, t}
-		if watchers := c.watchers[wpt]; len(watchers) > 0 {
-			for _, ch := range watchers {
-				ch <- ev
-				if t != watchTypePersistent {
-					close(ch)
+		for key, watchers := range c.watchersByKey {
+			if key.kind.isPersistent() {
+				// Persistent watchers are notified of all events.
+				if key.kind.isRecursive() {
+					if strings.HasPrefix(ev.Path, key.path) { // Recursive watchers match paths by prefix.
+						persistentWatchers = append(persistentWatchers, watchers...)
+					}
+				} else if ev.Path == key.path { // Non-recursive watchers match paths exactly.
+					persistentWatchers = append(persistentWatchers, watchers...)
 				}
-			}
-			if t != watchTypePersistent {
-				delete(c.watchers, wpt)
-			}
-		}
-	}
-
-	// Handle recursive watches.
-	for basePath, watchers := range c.recWatchers {
-		if strings.HasPrefix(ev.Path, basePath.path) {
-			for _, ch := range watchers {
-				ch <- ev
-			}
-		}
-	}
-}
-
-// Send error to all watchers and clear watchers map
-func (c *Conn) invalidateWatches(err error) {
-	c.watchersLock.Lock()
-	defer c.watchersLock.Unlock()
-
-	f := func(w map[watchPathType][]chan Event) {
-		if len(w) >= 0 {
-			for pathType, watchers := range w {
-				ev := Event{Type: EventNotWatching, State: StateDisconnected, Path: pathType.path, Err: err}
-				c.sendEvent(ev) // also publish globally
-				for _, ch := range watchers {
-					ch <- ev
-					close(ch)
-				}
-			}
-		}
-	}
-	f(c.watchers)
-	c.watchers = make(map[watchPathType][]chan Event)
-	f(c.recWatchers)
-	c.recWatchers = make(map[watchPathType][]chan Event)
-}
-
-func (c *Conn) sendSetWatches() {
-	c.watchersLock.Lock()
-	defer c.watchersLock.Unlock()
-
-	f := func(w map[watchPathType][]chan Event) {
-		if len(w) == 0 {
-			return
-		}
-
-		// NB: A ZK server, by default, rejects packets >1mb. So, if we have too
-		// many watches to reset, we need to break this up into multiple packets
-		// to avoid hitting that limit. Mirroring the Java client behavior: we are
-		// conservative in that we limit requests to 128kb (since server limit is
-		// is actually configurable and could conceivably be configured smaller
-		// than default of 1mb).
-		limit := 128 * 1024
-		if c.setWatchLimit > 0 {
-			limit = c.setWatchLimit
-		}
-
-		var reqs []*setWatches2Request
-		var req *setWatches2Request
-		var sizeSoFar int
-
-		n := 0
-		for pathType, watchers := range w {
-			if len(watchers) == 0 {
 				continue
 			}
-			addlLen := 4 + len(pathType.path)
-			if req == nil || sizeSoFar+addlLen > limit {
-				if req != nil {
-					// add to set of requests that we'll send
-					reqs = append(reqs, req)
-				}
-				sizeSoFar = 28 // fixed overhead of a set-watches packet
-				req = &setWatches2Request{
-					RelativeZxid:               c.lastZxid,
-					DataWatches:                make([]string, 0),
-					ExistWatches:               make([]string, 0),
-					ChildWatches:               make([]string, 0),
-					PersistentWatches:          make([]string, 0),
-					PersistentRecursiveWatches: make([]string, 0),
-				}
-			}
-			sizeSoFar += addlLen
-			switch pathType.wType {
-			case watchTypeData:
-				req.DataWatches = append(req.DataWatches, pathType.path)
-			case watchTypeExist:
-				req.ExistWatches = append(req.ExistWatches, pathType.path)
-			case watchTypeChild:
-				req.ChildWatches = append(req.ChildWatches, pathType.path)
-			case watchTypePersistent:
-				req.PersistentWatches = append(req.PersistentWatches, pathType.path)
-			case watchTypePersistentRecursive:
-				req.PersistentRecursiveWatches = append(req.PersistentRecursiveWatches, pathType.path)
-			}
-			n++
-		}
-		if n == 0 {
-			return
-		}
-		if req != nil { // don't forget any trailing packet we were building
-			reqs = append(reqs, req)
-		}
 
-		if c.setWatchCallback != nil {
-			c.setWatchCallback(reqs)
+			// Non-persistent watchers match specific events types and exact paths.
+			if key.kind.handlesEventType(ev.Type) && key.path == ev.Path {
+				nonPersistentWatchers = append(nonPersistentWatchers, watchers...)
+				delete(c.watchersByKey, key) // Remove watchers from map, since they can only be notified once.
+			}
 		}
+	}() // outside watchersLock.
 
+	// Notify and close non-persistent watchers.
+	for _, w := range nonPersistentWatchers {
+		_ = w.notify(ev)
+		w.close()
+	}
+
+	// Notify persistent watchers, collecting any dead ones.
+	var deadWatchers []watcher
+	for _, w := range persistentWatchers {
+		if !w.notify(ev) {
+			deadWatchers = append(deadWatchers, w)
+		}
+	}
+
+	if len(deadWatchers) > 0 {
+		// Remove any dead watchers that can no longer receive events.
+		// This must be done in the background to avoid deadlocking the recv loop.
 		go func() {
-			res := &setWatches2Response{}
-			// TODO: Pipeline these so queue all of them up before waiting on any
-			// response. That will require some investigation to make sure there
-			// aren't failure modes where a blocking write to the channel of requests
-			// could hang indefinitely and cause this goroutine to leak...
-			for _, req := range reqs {
-				_, err := c.request(context.Background(), opSetWatches2, req, res, nil)
-				if err != nil {
-					c.logger.Printf("Failed to set previous watches: %v", err)
-					break
-				}
+			for _, w := range deadWatchers {
+				_ = c.RemoveWatch(w.eventChan()) // Ignore errors.
 			}
 		}()
 	}
+}
 
-	f(c.watchers)
-	f(c.recWatchers)
+// Send EventNotWatching to all watchers and clear watchersByKey.
+func (c *Conn) invalidateWatchers(err error) {
+	c.watchersLock.Lock()
+	defer c.watchersLock.Unlock()
+
+	// All watchers receive EventNotWatching, and then are closed.
+	for key, watchers := range c.watchersByKey {
+		ev := Event{Type: EventNotWatching, State: StateDisconnected, Path: key.path, Err: err}
+		c.sendEvent(ev) // also publish globally
+		for _, w := range watchers {
+			_ = w.notify(ev) // We don't care if the event cannot be delivered.
+			w.close()
+		}
+	}
+
+	// Reset watchersByKey map.
+	c.watchersByKey = make(map[watcherKey][]watcher)
+}
+
+// Send EventNotWatching to any watchers with the `invalidateOnDisconnect` option set.
+func (c *Conn) invalidateWatchersOnDisconnect() {
+	c.watchersLock.Lock()
+	defer c.watchersLock.Unlock()
+
+	for key, watchers := range c.watchersByKey {
+		for i, w := range watchers {
+			if !w.options().invalidateOnDisconnect {
+				continue // ignore
+			}
+
+			// This watcher must be invalidated.
+			watchers = append(watchers[:i], watchers[i+1:]...)
+			if len(watchers) == 0 {
+				// No more watchers remain for key, so remove it from the map.
+				delete(c.watchersByKey, key)
+			} else {
+				// Store the updated list of watchers for key.
+				c.watchersByKey[key] = watchers
+			}
+
+			// Signal consumer that the watcher has been removed.
+			ev := Event{Type: EventNotWatching, State: StateDisconnected, Path: key.path, Err: nil}
+			_ = w.notify(ev) // Best effort, only.
+			w.close()
+			c.sendEvent(ev)
+		}
+	}
+}
+
+func (c *Conn) restoreWatches() {
+	c.watchersLock.Lock()
+	defer c.watchersLock.Unlock()
+
+	if len(c.watchersByKey) == 0 {
+		return // Nothing to do.
+	}
+
+	// NB: A ZK server, by default, rejects packets >1mb. So, if we have too
+	// many watches to reset, we need to break this up into multiple packets
+	// to avoid hitting that limit. Mirroring the Java client behavior: we are
+	// conservative in that we limit requests to 128kb (since server limit is
+	// is actually configurable and could conceivably be configured smaller
+	// than default of 1mb).
+	limit := 128 * 1024
+	if c.setWatchLimit > 0 {
+		limit = c.setWatchLimit
+	}
+
+	var reqs []*setWatches2Request
+	var req *setWatches2Request
+	var sizeSoFar int
+
+	n := 0
+	for key := range c.watchersByKey {
+		addlLen := 4 + len(key.path)
+		if req == nil || sizeSoFar+addlLen > limit {
+			if req != nil {
+				// add to set of requests that we'll send
+				reqs = append(reqs, req)
+			}
+			sizeSoFar = 28 // fixed overhead of a set-watches packet
+			req = &setWatches2Request{
+				RelativeZxid:               c.lastZxid,
+				DataWatches:                make([]string, 0),
+				ExistWatches:               make([]string, 0),
+				ChildWatches:               make([]string, 0),
+				PersistentWatches:          make([]string, 0),
+				PersistentRecursiveWatches: make([]string, 0),
+			}
+		}
+		sizeSoFar += addlLen
+		switch key.kind {
+		case watcherKindData:
+			req.DataWatches = append(req.DataWatches, key.path)
+		case watcherKindExist:
+			req.ExistWatches = append(req.ExistWatches, key.path)
+		case watcherKindChildren:
+			req.ChildWatches = append(req.ChildWatches, key.path)
+		case watcherKindPersistent:
+			req.PersistentWatches = append(req.PersistentWatches, key.path)
+		case watcherKindPersistentRecursive:
+			req.PersistentRecursiveWatches = append(req.PersistentRecursiveWatches, key.path)
+		}
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	if req != nil { // don't forget any trailing packet we were building
+		reqs = append(reqs, req)
+	}
+
+	if c.setWatchCallback != nil {
+		c.setWatchCallback(reqs)
+	}
+
+	go func() {
+		res := &setWatches2Response{}
+		// TODO: Pipeline these so queue all of them up before waiting on any
+		// response. That will require some investigation to make sure there
+		// aren't failure modes where a blocking write to the channel of requests
+		// could hang indefinitely and cause this goroutine to leak...
+		for _, req = range reqs {
+			_, err := c.request(context.Background(), opSetWatches2, req, res, nil)
+			if err != nil {
+				c.logger.Printf("failed to set previous watches: %v", err)
+				break
+			}
+		}
+	}()
 }
 
 func (c *Conn) authenticate() error {
@@ -770,7 +771,7 @@ func (c *Conn) resetSession(err error) {
 	atomic.StoreInt64(&c.sessionID, int64(0))
 	c.passwd = emptyPassword
 	c.lastZxid = 0
-	c.invalidateWatches(err)
+	c.invalidateWatchers(err)
 }
 
 func (c *Conn) sendData(req *request) error {
@@ -879,11 +880,11 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				Err:   nil,
 			}
 			c.sendEvent(ev)
-			c.notifyWatches(ev)
+			c.notifyWatchers(ev)
 		} else if res.Xid == -2 {
 			// Ping response. Ignore.
 		} else if res.Xid < 0 {
-			c.logger.Printf("Xid < 0 (%d) but not ping or watcher event", res.Xid)
+			c.logger.Printf("xid < 0 (%d) but not ping or watcher event", res.Xid)
 		} else {
 			if res.Zxid > 0 {
 				c.lastZxid = res.Zxid
@@ -897,7 +898,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			c.requestsLock.Unlock()
 
 			if !ok {
-				c.logger.Printf("Response for unknown request with xid %d", res.Xid)
+				c.logger.Printf("response for unknown request with xid %d", res.Xid)
 			} else {
 				var err error
 				if res.Err != 0 {
@@ -921,78 +922,62 @@ func (c *Conn) nextXid() int32 {
 	return int32(atomic.AddUint32(&c.xid, 1) & 0x7fffffff)
 }
 
-func (c *Conn) addWatcher(path string, watchType watchType) <-chan Event {
-	var chanSz int
-	switch watchType {
-	case watchTypePersistent, watchTypePersistentRecursive:
-		// Persistent watches have a larger buffer for events.
-		// This mitigates, but does not eliminate, the possibility for a slow consumer to block the producer.
-		chanSz = persistentWatchChanSize
-	default:
-		// Non-persistent watches have a buffer for 1 change event + 1 close event.
-		// This ensures that a slow consumer can never block the producer.
-		chanSz = watchChanSize
-	}
+func (c *Conn) addWatcher(path string, kind watcherKind, opts watcherOptions) <-chan Event {
+	key := watcherKey{path, kind}
+	var w watcher
 
-	ch := make(chan Event, chanSz)
-	wpt := watchPathType{path, watchType}
+	if kind.isPersistent() {
+		w = newPersistentWatcher(func() {
+			// Report watcher stalls.
+			c.sendEvent(Event{Type: EventWatcherStalled, Path: path, State: c.State()})
+			c.logger.Printf("persistent watcher has stalled! {kind:%s, path:%s}", kind, path)
+		}, opts)
+	} else {
+		w = newFireOnceWatcher(opts)
+	}
 
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()
 
-	if watchType == watchTypePersistentRecursive {
-		c.recWatchers[wpt] = append(c.recWatchers[wpt], ch)
-	} else {
-		c.watchers[wpt] = append(c.watchers[wpt], ch)
-	}
-	return ch
+	c.watchersByKey[key] = append(c.watchersByKey[key], w)
+
+	return w.eventChan()
 }
 
 // removeWatcher will attempt to remove a watcher associated with the given event channel.
-// If the watcher is successfully removed, its watchPathType will be returned along
-// with the number of remaining watchers with the same watchPathType.
-func (c *Conn) removeWatcher(ech <-chan Event) (ok bool, wpt watchPathType, remaining int) {
-	c.watchersLock.Lock()
-	defer c.watchersLock.Unlock()
-
-	f := func(watchers map[watchPathType][]chan Event) bool {
-		var chs []chan Event
-		for wpt, chs = range watchers {
-			for i, ch := range chs {
-				if ch != ech {
-					continue
-				}
-				// Channel found; remove it.
-				chs = append(chs[:i], chs[i+1:]...)
-				remaining = len(chs)
-				if remaining == 0 {
-					// No more watchers remain for watchPathType.
-					delete(watchers, wpt)
-				} else {
-					watchers[wpt] = chs
-				}
-				// Close the watch.
-				ev := Event{Type: EventNotWatching, State: c.State(), Path: wpt.path, Err: nil}
-				ch <- ev
-				close(ch)
-				c.sendEvent(ev)
-				return true
+// If the watcher is successfully removed, its watcherKey will be returned along
+// with the number of remaining watchers with the same watcherKey.
+// It is assumed that the caller has already acquired the watchersLock.
+func (c *Conn) removeWatcher(ech <-chan Event) (bool, watcherKey, int) {
+	for key, watchers := range c.watchersByKey {
+		for i, w := range watchers {
+			if w.eventChan() != ech {
+				continue // Not the watcher we're looking for.
 			}
+
+			// Found the watcher associated with the event channel.
+			// Let's remove it from the list of watchers.
+			watchers = append(watchers[:i], watchers[i+1:]...)
+			remaining := len(watchers)
+			if remaining == 0 {
+				// No more watchers remain for key, so remove it from the map.
+				delete(c.watchersByKey, key)
+			} else {
+				// Store the updated list of watchers for key.
+				c.watchersByKey[key] = watchers
+			}
+
+			// Signal consumer that the watcher has been removed.
+			ev := Event{Type: EventNotWatching, State: c.State(), Path: key.path, Err: nil}
+			_ = w.notify(ev) // Best effort, only.
+			w.close()
+			c.sendEvent(ev)
+
+			return true, key, remaining
 		}
-		return false // Channel not found.
 	}
 
-	if f(c.watchers) {
-		ok = true
-		return
-	}
-
-	if f(c.recWatchers) {
-		ok = true
-		return
-	}
-
-	return false, watchPathType{}, 0 // No watcher found for channel.
+	return false, watcherKey{}, 0 // No watcher found for channel.
 }
 
 func (c *Conn) queueRequest(ctx context.Context, opcode int32, req interface{}, res interface{}, recvFunc func(*request, *responseHeader, error)) <-chan response {
@@ -1087,27 +1072,33 @@ func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error
 }
 
 // AddWatch creates a persistent (optionally recursive) watch at the given path.
-func (c *Conn) AddWatch(path string, recursive bool) (<-chan Event, error) {
-	return c.AddWatchCtx(context.Background(), path, recursive)
+func (c *Conn) AddWatch(path string, recursive bool, options ...WatcherOption) (<-chan Event, error) {
+	return c.AddWatchCtx(context.Background(), path, recursive, options...)
 }
 
 // AddWatchCtx creates a persistent (optionally recursive) watch at the given path.
-func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool) (<-chan Event, error) {
+func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, options ...WatcherOption) (<-chan Event, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, err
 	}
 
 	var ech <-chan Event
-	mode := WatchModePersistent
-	wt := watchTypePersistent
+	mode := addWatchModePersistent
+	kind := watcherKindPersistent
 	if recursive {
-		mode = WatchModePersistentRecursive
-		wt = watchTypePersistentRecursive
+		mode = addWatchModePersistentRecursive
+		kind = watcherKindPersistentRecursive
 	}
+
+	wopts := watcherOptions{}
+	for _, opt := range options {
+		opt(&wopts)
+	}
+
 	res := &addWatchResponse{}
 	_, err := c.request(ctx, opAddWatch, &addWatchRequest{Path: path, Mode: mode}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
-			ech = c.addWatcher(path, wt)
+			ech = c.addWatcher(path, kind, wopts)
 		}
 	})
 	if err != nil {
@@ -1125,16 +1116,28 @@ func (c *Conn) RemoveWatch(ech <-chan Event) error {
 // RemoveWatchCtx removes a watch associated with the given channel.
 // Note: This method works for any type of watch, not just persistent ones.
 func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
+	c.watchersLock.Lock()
+	defer c.watchersLock.Unlock()
+
 	// Remove the watcher from the client, first.
-	ok, wpt, remaining := c.removeWatcher(ech)
+	ok, key, remaining := c.removeWatcher(ech)
 	if !ok {
 		return ErrNoWatcher
 	}
 
 	if remaining == 0 {
-		// No more watchers remain for the watchPathType, so we can remove the watch from the server.
+		// No more watchers remain for the watcherKey, so we can remove the watch from the server.
+		req := &removeWatchesRequest{Path: key.path}
 		res := &removeWatchesResponse{}
-		_, err := c.request(ctx, opRemoveWatches, &RemoveWatchesRequest{Path: wpt.path, Type: wpt.wType.WatcherType()}, res, nil)
+		switch key.kind {
+		case watcherKindData:
+			req.Type = removeWatchTypeData
+		case watcherKindChildren:
+			req.Type = removeWatchTypeChildren
+		default:
+			req.Type = removeWatchTypePersistent
+		}
+		_, err := c.request(ctx, opRemoveWatches, req, res, nil)
 		if err != nil {
 			return err
 		}
@@ -1177,7 +1180,7 @@ func (c *Conn) ChildrenWCtx(ctx context.Context, path string) ([]string, *Stat, 
 	res := &getChildren2Response{}
 	_, err := c.request(ctx, opGetChildren2, &getChildren2Request{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
-			ech = c.addWatcher(path, watchTypeChild)
+			ech = c.addWatcher(path, watcherKindChildren, watcherOptions{})
 		}
 	})
 	if err != nil {
@@ -1220,7 +1223,7 @@ func (c *Conn) GetWCtx(ctx context.Context, path string) ([]byte, *Stat, <-chan 
 	res := &getDataResponse{}
 	_, err := c.request(ctx, opGetData, &getDataRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
-			ech = c.addWatcher(path, watchTypeData)
+			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
 		}
 	})
 	if err != nil {
@@ -1422,9 +1425,9 @@ func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan
 	res := &existsResponse{}
 	_, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
-			ech = c.addWatcher(path, watchTypeData)
+			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
 		} else if err == ErrNoNode {
-			ech = c.addWatcher(path, watchTypeExist)
+			ech = c.addWatcher(path, watcherKindExist, watcherOptions{})
 		}
 	})
 	exists := true

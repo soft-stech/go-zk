@@ -11,10 +11,11 @@ import (
 
 func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCache {
 	tc := &TreeCache{
-		conn:     conn,
-		logger:   conn.logger, // By default, use the connection's logger.
-		rootPath: path,
-		rootNode: newTreeCacheNode("", &Stat{}, nil),
+		conn:         conn,
+		logger:       conn.logger, // By default, use the connection's logger.
+		rootPath:     path,
+		rootNode:     newTreeCacheNode("", &Stat{}, nil),
+		syncDoneChan: make(chan struct{}, 1),
 	}
 	for _, option := range options {
 		option(tc)
@@ -49,17 +50,18 @@ func TreeCacheAbsolutePaths(absolutePaths bool) TreeCacheOption {
 }
 
 type TreeCache struct {
-	conn            *Conn
-	logger          Logger
-	rootPath        string         // Path to root node being cached.
-	includeData     bool           // true to include data in cache; false to omit.
-	absolutePaths   bool           // true to report full/absolute paths; false to report paths relative to rootPath.
-	rootNode        *treeCacheNode // Root node of the tree.
-	treeMutex       sync.RWMutex   // Protects tree state (rootNode and all descendants).
-	syncing         bool           // Set to true while Sync() is running; false otherwise.
-	initialSyncDone bool           // Set to true after the first full tree sync is complete.
-	initialSyncCh   chan error     // Closed when initial sync completes or fails; holds error if failed.
-	syncMutex       sync.Mutex     // Protects sync state.
+	conn              *Conn
+	logger            Logger
+	rootPath          string         // Path to root node being cached.
+	includeData       bool           // true to include data in cache; false to omit.
+	absolutePaths     bool           // true to report full/absolute paths; false to report paths relative to rootPath.
+	rootNode          *treeCacheNode // Root node of the tree.
+	treeMutex         sync.RWMutex   // Protects tree state (rootNode and all descendants).
+	syncing           bool           // Set to true while Sync() is running; false otherwise.
+	initialSyncDone   bool           // Set to true after the first full tree sync is complete.
+	initialSyncResult chan error     // Closed when initial sync completes or fails; holds error if failed.
+	syncMutex         sync.Mutex     // Protects sync state.
+	syncDoneChan      chan struct{}  // A channel that is written to when a sync cycle completes. Used to testing, only.
 
 }
 
@@ -73,7 +75,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 
 	tc.syncing = true
 	tc.initialSyncDone = false
-	tc.initialSyncCh = make(chan error, 1)
+	tc.initialSyncResult = make(chan error, 1)
 
 	tc.syncMutex.Unlock()
 
@@ -81,14 +83,16 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 		tc.syncMutex.Lock()
 		defer tc.syncMutex.Unlock()
 
+		close(tc.syncDoneChan)
+
 		tc.syncing = false
 		if !tc.initialSyncDone {
 			if err != nil {
-				tc.initialSyncCh <- err
+				tc.initialSyncResult <- err
 			} else {
-				tc.initialSyncCh <- fmt.Errorf("tree cache stopped syncing")
+				tc.initialSyncResult <- fmt.Errorf("tree cache stopped syncing")
 			}
-			close(tc.initialSyncCh) // Unblock anything waiting on initial sync.
+			close(tc.initialSyncResult) // Unblock anything waiting on initial sync.
 		}
 	}()
 
@@ -104,7 +108,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 		}
 
 		// Wait for path to exist.
-		if found, _, ch, err := tc.conn.ExistsWCtx(ctx, tc.rootPath); !found || err != nil {
+		if found, _, existsCh, err := tc.conn.ExistsWCtx(ctx, tc.rootPath); !found || err != nil {
 			if err != nil {
 				tc.logger.Printf("failed to check if path exists: %v", err)
 				continue // Re-check conditions.
@@ -112,7 +116,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 			tc.logger.Printf("path does not exist: %s", tc.rootPath)
 			// Wait for the path to be created.
 			select {
-			case <-ch:
+			case <-existsCh:
 			case <-ctx.Done():
 			}
 			continue //  Re-check conditions.
@@ -129,35 +133,12 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 func (tc *TreeCache) doSync(ctx context.Context) error {
 	// Start a recursive watch, so we do not miss any changes.
 	// We'll catch up with the changes after the initial sync.
-	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true)
+	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true, WithWatcherInvalidateOnDisconnect())
 	if err != nil {
 		return err
 	}
 	defer func() {
 		_ = tc.conn.RemoveWatch(watchCh)
-	}()
-
-	// Temporary workaround for race condition on Events vs Get answers
-	// FIXME: replace with a better data structure
-	watchBuffer := make(chan Event, 10240)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				close(watchBuffer)
-				return
-			case e, ok := <-watchCh:
-				if !ok {
-					tc.logger.Printf("watchBuffer channel closed unexpectedly")
-					return
-				}
-				select {
-				case watchBuffer <- e:
-				default:
-					tc.logger.Printf("watchBuffer is full, skip event: %+v", e)
-				}
-			}
-		}
 	}()
 
 	// Populate a new tree with a parallel, breadth-first traversal.
@@ -207,14 +188,20 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	if !tc.initialSyncDone {
 		// Signal to waiters in WaitForInitialSync() that initial sync has completed.
 		tc.initialSyncDone = true
-		close(tc.initialSyncCh)
+		close(tc.initialSyncResult)
 	}
 	tc.syncMutex.Unlock()
+
+	// Signal that a sync cycle has completed (used for testing, only).
+	select {
+	case tc.syncDoneChan <- struct{}{}:
+	default: // No blocking.
+	}
 
 	// Process watch events until the context is canceled, watching is stopped, or an error occurs.
 	for {
 		select {
-		case e, ok := <-watchBuffer:
+		case e, ok := <-watchCh:
 			if !ok {
 				return fmt.Errorf("watch channel closed unexpectedly")
 			}
@@ -273,18 +260,15 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 }
 
 func (tc *TreeCache) waitForSession(ctx context.Context) error {
-	select {
-	case e, ok := <-tc.conn.eventChan:
-		if !ok {
-			return fmt.Errorf("connection closed before state reached")
+	for tc.conn.State() != StateHasSession {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tc.conn.shouldQuit:
+			return ErrClosing
+		case <-time.After(100 * time.Millisecond):
 		}
-		if e.State == StateHasSession {
-			return nil
-		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
-
 	return nil
 }
 
@@ -347,8 +331,8 @@ func (tc *TreeCache) WaitForInitialSync(ctx context.Context) error {
 		break // Break loop with lock held.
 	}
 
-	// Get a ref to the initialSyncCh, so we can release the lock before waiting on it.
-	syncCh := tc.initialSyncCh
+	// Get a ref to the initialSyncResult, so we can release the lock before waiting on it.
+	syncCh := tc.initialSyncResult
 	tc.syncMutex.Unlock()
 
 	// Wait for the initial sync to complete/abort, or context to be canceled; whichever happens first.

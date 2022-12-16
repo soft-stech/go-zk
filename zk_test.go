@@ -169,12 +169,12 @@ func TestCreateContainer(t *testing.T) {
 }
 
 func TestIncrementalReconfig(t *testing.T) {
-	if val, ok := os.LookupEnv("zk_version"); ok {
-		if !strings.HasPrefix(val, "3.5") {
+	if zkVersion := zkVersionFromEnv(); zkVersion.IsValid() {
+		if zkVersion.LessThan(Version{3, 5, 0}) {
 			t.Skip("running with zookeeper that does not support this api")
 		}
 	} else {
-		t.Skip("did not detect zk_version from env. skipping reconfig test")
+		t.Skip("did not detect valid ZK_VERSION from env. skipping reconfig test")
 	}
 
 	t.Parallel()
@@ -183,7 +183,9 @@ func TestIncrementalReconfig(t *testing.T) {
 		// start and add a new server.
 		tmpPath, err := os.MkdirTemp("", "gozk")
 		requireNoError(t, err, "failed to create tmp dir for test server setup")
-		defer os.RemoveAll(tmpPath)
+		defer func(path string) {
+			_ = os.RemoveAll(path)
+		}(tmpPath)
 
 		startPort := int(rand.Int31n(6000) + 10000)
 
@@ -209,19 +211,21 @@ func TestIncrementalReconfig(t *testing.T) {
 		requireNoError(t, err)
 
 		requireNoError(t, cfg.Marshall(fi))
-		fi.Close()
+		_ = fi.Close()
 
 		fi, err = os.Create(filepath.Join(srvPath, _testMyIDFileName))
 		requireNoError(t, err)
 
 		_, err = fmt.Fprintln(fi, "4")
-		fi.Close()
+		_ = fi.Close()
 		requireNoError(t, err)
 
 		testServer, err := NewIntegrationTestServer(t, cfgPath, nil, nil)
 		requireNoError(t, err)
 		requireNoError(t, testServer.Start())
-		defer testServer.Stop() // nolint: errcheck
+		defer func() {
+			_ = testServer.Stop()
+		}()
 
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, ech <-chan Event) {
 			err = c.AddAuth("digest", []byte("super:test"))
@@ -263,12 +267,12 @@ func TestIncrementalReconfig(t *testing.T) {
 }
 
 func TestReconfig(t *testing.T) {
-	if val, ok := os.LookupEnv("zk_version"); ok {
-		if !strings.HasPrefix(val, "3.5") {
+	if zkVersion := zkVersionFromEnv(); zkVersion.IsValid() {
+		if zkVersion.LessThan(Version{3, 5, 0}) {
 			t.Skip("running with zookeeper that does not support this api")
 		}
 	} else {
-		t.Skip("did not detect zk_version from env. skipping reconfig test")
+		t.Skip("did not detect valid ZK_VERSION from env. skipping reconfig test")
 	}
 
 	t.Parallel()
@@ -1163,7 +1167,7 @@ func TestSetWatchers(t *testing.T) {
 		}
 
 		// Simulate network error by brutally closing the network connection.
-		c1.conn.Close()
+		_ = c1.conn.Close()
 		for p := range testPaths {
 			if err := c2.Delete(p, -1); err != nil && err != ErrNoNode {
 				t.Fatalf("Delete returned error: %+v", err)
@@ -1264,7 +1268,7 @@ func TestExpiringWatch(t *testing.T) {
 			}
 
 			c.sessionID = 99999
-			c.conn.Close()
+			_ = c.conn.Close()
 
 			select {
 			case ev := <-childCh:
@@ -1348,7 +1352,7 @@ func TestSlowServer(t *testing.T) {
 		}
 
 		// Force a reconnect to get a throttled connection
-		c.conn.Close()
+		_ = c.conn.Close()
 
 		time.Sleep(time.Millisecond * 100)
 
@@ -1599,7 +1603,7 @@ func startSlowProxy(t *testing.T, up, down Rate, upstream string, adj func(ln *L
 	stopCh := make(chan bool)
 	go func() {
 		<-stopCh
-		tln.Close()
+		_ = tln.Close()
 	}()
 
 	errs := make(chan error, 1)
@@ -1618,7 +1622,9 @@ func startSlowProxy(t *testing.T, up, down Rate, upstream string, adj func(ln *L
 				adj(tln)
 			}
 			go func(cn net.Conn) {
-				defer cn.Close()
+				defer func() {
+					_ = cn.Close()
+				}()
 				upcn, err := net.Dial("tcp", upstream)
 				if err != nil {
 					t.Log(err)
@@ -1628,7 +1634,7 @@ func startSlowProxy(t *testing.T, up, down Rate, upstream string, adj func(ln *L
 				// but it doesn't matter in the context of running tests.
 				go func() {
 					<-stopCh
-					upcn.Close()
+					_ = upcn.Close()
 				}()
 				go func() {
 					if _, err := io.Copy(upcn, cn); err != nil {
@@ -1675,4 +1681,12 @@ func expectLogMessage(t *testing.T, logger *testLogger, pattern string) {
 	} else if len(found) > 1 {
 		t.Fatalf("Logged error redundantly %d times:\n%+v", len(found), found)
 	}
+}
+
+func zkVersionFromEnv() Version {
+	vs, ok := os.LookupEnv("ZK_VERSION")
+	if !ok {
+		return Version{-1, -1, -1}
+	}
+	return ParseVersion(vs)
 }

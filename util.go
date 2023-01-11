@@ -134,3 +134,13 @@ func readFullWithDeadline(conn net.Conn, b []byte, timeout time.Duration) (int, 
 	_ = conn.SetReadDeadline(time.Time{})
 	return n, err
 }
+
+func safeResetTimer(tm *time.Timer, d time.Duration) {
+	if !tm.Stop() {
+		select {
+		case <-tm.C:
+		default:
+		}
+	}
+	tm.Reset(d)
+}

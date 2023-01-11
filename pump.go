@@ -8,10 +8,8 @@ import (
 )
 
 const (
-	// The maximum size of reservoir before the pump stalls.
-	pumpReservoirLimit = 2048
-	// The reservoir size after which the pump will begin blocking sends to output.
-	pumpReservoirBlockingThreshold = int(pumpReservoirLimit * 0.75)
+	// The % usage of reservoir limit after which the pump will begin blocking sends to output.
+	pumpReservoirBlockingUsage = 0.75
 )
 
 const (
@@ -41,16 +39,17 @@ func (c pumpCondition) String() string {
 	return "Unknown"
 }
 
-// newPump creates a new pump[T] and returns it in a running state.
-func newPump[T any](stallCallback func()) *pump[T] {
+// newPump returns a new pump[T] with the given reservoir size limit and optional stall callback func.
+func newPump[T any](reservoirLimit uint32, stallCallback func()) *pump[T] {
 	p := &pump[T]{
-		input:         make(chan T, 32),
-		output:        make(chan T, 32),
-		reservoir:     newRingBuffer[T](32),
-		started:       make(chan struct{}),
-		stopRequested: make(chan struct{}),
-		stopped:       make(chan struct{}),
-		stallCallback: stallCallback,
+		input:          make(chan T, 32),
+		output:         make(chan T, 32),
+		reservoir:      newRingBuffer[T](32),
+		started:        make(chan struct{}),
+		stopRequested:  make(chan struct{}),
+		stopped:        make(chan struct{}),
+		reservoirLimit: reservoirLimit,
+		stallCallback:  stallCallback,
 	}
 
 	go p.run()
@@ -80,10 +79,11 @@ type pump[T any] struct {
 	stopped        chan struct{}  // Closed after pump has stopped running.
 	stopOnce       sync.Once      // Ensures stopRequested is closed only once.
 	closeInputOnce sync.Once      // Ensures input is closed only once.
+	reservoirLimit uint32         // The size limit for reservoir.
 	stallCallback  func()         // An optional callback to invoke when the pump stalls.
 	intakeTotal    int64          // Total number of values received from input.
 	dischargeTotal int64          // Total number of values sent to output.
-	reservoirPeak  int32          // Maximum size of reservoir.
+	reservoirPeak  int32          // Maximum observed size of reservoir.
 }
 
 type pumpStats struct {
@@ -338,9 +338,11 @@ func (p *pump[T]) transferDirect(tm *time.Timer) (intakeCount, dischargeCount in
 // intakeAndDischarge concurrently drains the input into reservoir and fills the output from reservoir.
 // Returns when the input is closed, the pump is stopped, or the reservoir limit has been reached.
 func (p *pump[T]) intakeAndDischarge(tm *time.Timer) (intakeCount, dischargeCount int64, cond pumpCondition) {
+	blockingThreshold := uint32(float64(p.reservoirLimit) * pumpReservoirBlockingUsage)
+
 	for {
 		rlen := p.reservoir.len()
-		if rlen > pumpReservoirLimit { // No hope of draining the reservoir fast enough.
+		if rlen > p.reservoirLimit { // No hope of draining the reservoir fast enough.
 			cond = pumpConditionReservoirFull
 			return
 		}
@@ -351,7 +353,7 @@ func (p *pump[T]) intakeAndDischarge(tm *time.Timer) (intakeCount, dischargeCoun
 			return
 		}
 
-		if rlen == p.reservoir.cap() || rlen >= pumpReservoirBlockingThreshold {
+		if rlen == p.reservoir.cap() || rlen >= blockingThreshold {
 			// Reservoir needs to grow, or has reached threshold for blocking send.
 			// Try a (time-limited) blocking send to output before further intake.
 			// This will give the consumer a chance to catch up.

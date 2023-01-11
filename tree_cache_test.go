@@ -58,7 +58,7 @@ func TestTreeCache_ConsistentAfterInitialSync(t *testing.T) {
 
 			// By default, paths a relative to root.
 			cache := NewTreeCache(c, "/test-tree-cache",
-				TreeCacheIncludeData(true))
+				WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -135,7 +135,7 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 			}
 
 			cache := NewTreeCache(c, "/test-tree-cache",
-				TreeCacheIncludeData(true))
+				WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -279,8 +279,8 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 			}
 
 			cache := NewTreeCache(c, "/test-tree-cache",
-				TreeCacheIncludeData(true),
-				TreeCacheAbsolutePaths(true))
+				WithTreeCacheIncludeData(true),
+				WithTreeCacheAbsolutePaths(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -386,7 +386,7 @@ func TestTreeCache_WatchesNodeCreate(t *testing.T) {
 				t.Fatalf("failed to create node %s: %v", "/test-tree-cache", err)
 			}
 
-			cache := NewTreeCache(c, "/test-tree-cache", TreeCacheIncludeData(true))
+			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -447,7 +447,7 @@ func TestTreeCache_WatchesNodeUpdate(t *testing.T) {
 				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child1", err)
 			}
 
-			cache := NewTreeCache(c, "/test-tree-cache", TreeCacheIncludeData(true))
+			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -499,7 +499,7 @@ func TestTreeCache_WatchesNodeDelete(t *testing.T) {
 				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child1", err)
 			}
 
-			cache := NewTreeCache(c, "/test-tree-cache", TreeCacheIncludeData(true))
+			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -546,7 +546,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 				t.Fatalf("failed to create node %s: %v", "/test-tree-cache", err)
 			}
 
-			cache := NewTreeCache(c1, "/test-tree-cache", TreeCacheIncludeData(true))
+			cache := NewTreeCache(c1, "/test-tree-cache", WithTreeCacheIncludeData(true))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 

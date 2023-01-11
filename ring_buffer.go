@@ -8,17 +8,17 @@ type ringBuffer[T any] struct {
 	// The buffer.
 	buf []T
 	// The index of the first item in the buffer.
-	head int
+	head uint32
 	// The index of the last item in the buffer.
-	tail int
+	tail uint32
 	// The number of items in the buffer.
-	count int
+	count uint32
 	// The capacity of the buffer.
-	capacity int
+	capacity uint32
 }
 
 // newRingBuffer creates a new ringBuffer with the given capacity.
-func newRingBuffer[T any](capacity int) *ringBuffer[T] {
+func newRingBuffer[T any](capacity uint32) *ringBuffer[T] {
 	return &ringBuffer[T]{
 		buf:      make([]T, capacity),
 		capacity: capacity,
@@ -30,12 +30,12 @@ func (rb *ringBuffer[T]) isEmpty() bool {
 }
 
 // len returns the number of items in the buffer.
-func (rb *ringBuffer[T]) len() int {
+func (rb *ringBuffer[T]) len() uint32 {
 	return rb.count
 }
 
 // cap returns the capacity of the buffer.
-func (rb *ringBuffer[T]) cap() int {
+func (rb *ringBuffer[T]) cap() uint32 {
 	return rb.capacity
 }
 
@@ -95,7 +95,7 @@ func (rb *ringBuffer[T]) clear() {
 
 // ensureCapacity increases the capacity of the buffer to at least the given capacity.
 // If the buffer is already at least that large, this is a no-op.
-func (rb *ringBuffer[T]) ensureCapacity(minCapacity int) {
+func (rb *ringBuffer[T]) ensureCapacity(minCapacity uint32) {
 	if minCapacity <= rb.capacity {
 		return
 	}

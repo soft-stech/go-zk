@@ -16,7 +16,7 @@ func Test_pump_NoConsumerLag(t *testing.T) {
 		atomic.StoreUint32(&stalled, 1)
 	}
 
-	p := newPump[int](stallCallback)
+	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -95,14 +95,13 @@ func Test_pump_LowConsumerLag(t *testing.T) {
 		atomic.StoreUint32(&stalled, 1)
 	}
 
-	p := newPump[int](stallCallback)
+	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Start receiving items from pump in a new goroutine.
-	// We block for 1 ms every 256 items received and for 10 ms every 1024 items received.
 	consumerErr := make(chan error, 1)
 	go func() {
 		startTime := time.Now()
@@ -178,14 +177,13 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 		atomic.StoreUint32(&stalled, 1)
 	}
 
-	p := newPump[int](stallCallback)
+	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Start receiving items from pump in a new goroutine.
-	// We block for 1 ms every 256 items received and for 10 ms every 1024 items received.
 	consumerErr := make(chan error, 1)
 	go func() {
 		startTime := time.Now()
@@ -205,7 +203,8 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 				consumerErr <- fmt.Errorf("expected to receive item %d, but got %d", i, item)
 				break
 			}
-			if i%2048 == 0 {
+			// Block for 100 ms every 1024 items.
+			if i%1024 == 0 {
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
@@ -260,7 +259,7 @@ func Test_pump_Stall(t *testing.T) {
 		atomic.StoreUint32(&stalled, 1)
 	}
 
-	p := newPump[int](stallCallback)
+	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -302,7 +301,7 @@ func Test_pump_Stall(t *testing.T) {
 }
 
 func Test_pump_offer_Accepted(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	ok := p.offer(1)
@@ -312,7 +311,7 @@ func Test_pump_offer_Accepted(t *testing.T) {
 }
 
 func Test_pump_offer_RejectedAfterInputClosed(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	p.closeInput()
@@ -324,7 +323,7 @@ func Test_pump_offer_RejectedAfterInputClosed(t *testing.T) {
 }
 
 func Test_pump_offer_RejectedAfterStopped(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	p.stop()
 
 	ok := p.offer(1)
@@ -334,7 +333,7 @@ func Test_pump_offer_RejectedAfterStopped(t *testing.T) {
 }
 
 func Test_pump_give_Accepted(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	ok := p.give(context.Background(), 1)
@@ -344,7 +343,7 @@ func Test_pump_give_Accepted(t *testing.T) {
 }
 
 func Test_pump_give_RejectedAfterInputClosed(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	p.closeInput()
@@ -356,7 +355,7 @@ func Test_pump_give_RejectedAfterInputClosed(t *testing.T) {
 }
 
 func Test_pump_give_RejectedAfterStopped(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	p.stop()
 
 	ok := p.give(context.Background(), 1)
@@ -366,7 +365,7 @@ func Test_pump_give_RejectedAfterStopped(t *testing.T) {
 }
 
 func Test_pump_poll_Accepted(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	_ = p.give(context.Background(), 1)
@@ -382,7 +381,7 @@ func Test_pump_poll_Accepted(t *testing.T) {
 }
 
 func Test_pump_poll_RejectedAfterStopped(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	p.stop()
 
 	_, ok := p.poll()
@@ -392,7 +391,7 @@ func Test_pump_poll_RejectedAfterStopped(t *testing.T) {
 }
 
 func Test_pump_take_Accepted(t *testing.T) {
-	p := newPump[int](nil)
+	p := newPump[int](16, nil)
 	defer p.stop()
 
 	_ = p.give(context.Background(), 1)

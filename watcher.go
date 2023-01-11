@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+const (
+	defaultReservoirLimit = 2048
+)
+
 // WatcherOption represents an option for a watcher.
 type WatcherOption func(*watcherOptions)
 
@@ -16,9 +20,20 @@ func WithWatcherInvalidateOnDisconnect() WatcherOption {
 	}
 }
 
+// WithWatcherReservoirLimit returns a WatcherOption that configures the reservoir limit for a persistent watcher.
+// The reservoir limit is the absolute maximum number of events that can be queued before the watcher is forcefully closed.
+func WithWatcherReservoirLimit(reservoirLimit uint32) WatcherOption {
+	return func(opts *watcherOptions) {
+		opts.reservoirLimit = reservoirLimit
+	}
+}
+
 type watcherOptions struct {
 	// If true, the watcher will be invalidated if the connection is lost.
 	invalidateOnDisconnect bool
+	// The pump reservoir limit for persistent watchers.
+	// Defaults to 2048.
+	reservoirLimit uint32
 }
 
 type watcherKey struct {
@@ -84,9 +99,13 @@ func (w *fireOnceWatcher) close() {
 }
 
 func newPersistentWatcher(stallCallback func(), opts watcherOptions) *persistentWatcher {
+	if opts.reservoirLimit == 0 {
+		opts.reservoirLimit = defaultReservoirLimit
+	}
+
 	return &persistentWatcher{
 		opts: opts,
-		pump: newPump[Event](stallCallback),
+		pump: newPump[Event](opts.reservoirLimit, stallCallback),
 	}
 }
 

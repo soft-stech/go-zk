@@ -11,11 +11,12 @@ import (
 
 func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCache {
 	tc := &TreeCache{
-		conn:         conn,
-		logger:       conn.logger, // By default, use the connection's logger.
-		rootPath:     path,
-		rootNode:     newTreeCacheNode("", &Stat{}, nil),
-		syncDoneChan: make(chan struct{}, 1),
+		conn:           conn,
+		logger:         conn.logger, // By default, use the connection's logger.
+		rootPath:       path,
+		rootNode:       newTreeCacheNode("", &Stat{}, nil),
+		syncDoneChan:   make(chan struct{}, 1),
+		reservoirLimit: defaultReservoirLimit,
 	}
 	for _, option := range options {
 		option(tc)
@@ -25,27 +26,35 @@ func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCach
 
 type TreeCacheOption func(*TreeCache)
 
-// TreeCacheLogger returns an option that sets the logger to use for the tree cache.
-func TreeCacheLogger(logger Logger) TreeCacheOption {
+// WithTreeCacheLogger returns an option that sets the logger to use for the tree cache.
+func WithTreeCacheLogger(logger Logger) TreeCacheOption {
 	return func(tc *TreeCache) {
 		tc.logger = logger
 	}
 }
 
-// TreeCacheIncludeData returns an option to include data in the tree cache.
-func TreeCacheIncludeData(includeData bool) TreeCacheOption {
+// WithTreeCacheIncludeData returns an option to include data in the tree cache.
+func WithTreeCacheIncludeData(includeData bool) TreeCacheOption {
 	return func(tc *TreeCache) {
 		tc.includeData = includeData
 	}
 }
 
-// TreeCacheAbsolutePaths returns an option to use full/absolute paths in the tree cache.
+// WithTreeCacheAbsolutePaths returns an option to use full/absolute paths in the tree cache.
 // Normally, the cache reports paths relative to the node it is rooted at.
 // For example, if the cache is rooted at "/foo" and "/foo/bar" is created, the cache reports the node as "/bar".
 // With absolute paths enabled, the cache reports the node as "/foo/bar".
-func TreeCacheAbsolutePaths(absolutePaths bool) TreeCacheOption {
+func WithTreeCacheAbsolutePaths(absolutePaths bool) TreeCacheOption {
 	return func(tc *TreeCache) {
 		tc.absolutePaths = absolutePaths
+	}
+}
+
+// WithTreeCacheReservoirLimit returns an option to use the specified reservoir limit in the tree cache.
+// The reservoir limit is the absolute maximum number of events that can be queued by watchers before being forcefully closed.
+func WithTreeCacheReservoirLimit(reservoirLimit uint32) TreeCacheOption {
+	return func(tc *TreeCache) {
+		tc.reservoirLimit = reservoirLimit
 	}
 }
 
@@ -55,6 +64,7 @@ type TreeCache struct {
 	rootPath          string         // Path to root node being cached.
 	includeData       bool           // true to include data in cache; false to omit.
 	absolutePaths     bool           // true to report full/absolute paths; false to report paths relative to rootPath.
+	reservoirLimit    uint32         // The reservoir size limit for persistent watchers. Defaults to defaultReservoirLimit.
 	rootNode          *treeCacheNode // Root node of the tree.
 	treeMutex         sync.RWMutex   // Protects tree state (rootNode and all descendants).
 	syncing           bool           // Set to true while Sync() is running; false otherwise.
@@ -133,7 +143,9 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 func (tc *TreeCache) doSync(ctx context.Context) error {
 	// Start a recursive watch, so we do not miss any changes.
 	// We'll catch up with the changes after the initial sync.
-	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true, WithWatcherInvalidateOnDisconnect())
+	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true,
+		WithWatcherInvalidateOnDisconnect(),
+		WithWatcherReservoirLimit(tc.reservoirLimit))
 	if err != nil {
 		return err
 	}

@@ -15,7 +15,6 @@ func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCach
 		logger:         conn.logger, // By default, use the connection's logger.
 		rootPath:       path,
 		rootNode:       newTreeCacheNode("", &Stat{}, nil),
-		syncDoneChan:   make(chan struct{}, 1),
 		reservoirLimit: defaultReservoirLimit,
 	}
 	for _, option := range options {
@@ -58,6 +57,84 @@ func WithTreeCacheReservoirLimit(reservoirLimit uint32) TreeCacheOption {
 	}
 }
 
+// WithTreeCacheListener returns an option to use the specified listener in the tree cache.
+func WithTreeCacheListener(listener TreeCacheListener) TreeCacheOption {
+	return func(tc *TreeCache) {
+		tc.listener = listener
+	}
+}
+
+// TreeCacheListener is a listener for tree cache events.
+// Events are delivered synchronously, so the listener should not block.
+type TreeCacheListener interface {
+	// OnSyncStarted is called when the tree cache has started the sync loop.
+	OnSyncStarted()
+
+	// OnSyncStopped is called when the tree cache has stopped the sync loop.
+	OnSyncStopped()
+
+	// OnTreeSynced is called when the tree cache has completed a full sync of state.
+	// This is called once after the tree cache is started, and again after each subsequent sync cycle.
+	// A new sync cycle is triggered by a connection loss or session expiration.
+	OnTreeSynced()
+
+	// OnNodeCreated is called when a node is created after last full sync.
+	OnNodeCreated(path string, data []byte, stat *Stat)
+
+	// OnNodeDeleted is called when a node is deleted after last full sync.
+	OnNodeDeleted(path string)
+
+	// OnNodeDataChanged is called when a node's data is changed after last full sync.
+	OnNodeDataChanged(path string, data []byte, stat *Stat)
+}
+
+// TreeCacheListenerFuncs is a convenience type that implements TreeCacheListener with function callbacks.
+// Any callback that is nil is ignored.
+type TreeCacheListenerFuncs struct {
+	OnSyncStartedFunc     func()
+	OnSyncStoppedFunc     func()
+	OnTreeSyncedFunc      func()
+	OnNodeCreatedFunc     func(path string, data []byte, stat *Stat)
+	OnNodeDeletedFunc     func(path string)
+	OnNodeDataChangedFunc func(path string, data []byte, stat *Stat)
+}
+
+func (l *TreeCacheListenerFuncs) OnSyncStarted() {
+	if l.OnSyncStartedFunc != nil {
+		l.OnSyncStartedFunc()
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnSyncStopped() {
+	if l.OnSyncStoppedFunc != nil {
+		l.OnSyncStoppedFunc()
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnTreeSynced() {
+	if l.OnTreeSyncedFunc != nil {
+		l.OnTreeSyncedFunc()
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnNodeCreated(path string, data []byte, stat *Stat) {
+	if l.OnNodeCreatedFunc != nil {
+		l.OnNodeCreatedFunc(path, data, stat)
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnNodeDeleted(path string) {
+	if l.OnNodeDeletedFunc != nil {
+		l.OnNodeDeletedFunc(path)
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnNodeDataChanged(path string, data []byte, stat *Stat) {
+	if l.OnNodeDataChangedFunc != nil {
+		l.OnNodeDataChangedFunc(path, data, stat)
+	}
+}
+
 type TreeCache struct {
 	conn              *Conn
 	logger            Logger
@@ -71,8 +148,7 @@ type TreeCache struct {
 	initialSyncDone   bool           // Set to true after the first full tree sync is complete.
 	initialSyncResult chan error     // Closed when initial sync completes or fails; holds error if failed.
 	syncMutex         sync.Mutex     // Protects sync state.
-	syncDoneChan      chan struct{}  // A channel that is written to when a sync cycle completes. Used to testing, only.
-
+	listener          TreeCacheListener
 }
 
 func (tc *TreeCache) Sync(ctx context.Context) (err error) {
@@ -93,9 +169,8 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 		tc.syncMutex.Lock()
 		defer tc.syncMutex.Unlock()
 
-		close(tc.syncDoneChan)
-
 		tc.syncing = false
+
 		if !tc.initialSyncDone {
 			if err != nil {
 				tc.initialSyncResult <- err
@@ -104,7 +179,15 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 			}
 			close(tc.initialSyncResult) // Unblock anything waiting on initial sync.
 		}
+
+		if tc.listener != nil {
+			tc.listener.OnSyncStopped()
+		}
 	}()
+
+	if tc.listener != nil {
+		tc.listener.OnSyncStarted()
+	}
 
 	// Loop until the context is canceled or the connection is closed.
 	for {
@@ -136,7 +219,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 			tc.logger.Printf("failed to sync tree cache: %v", err)
 		}
 
-		// Loop back to restart sync.
+		// Loop back to restart next sync cycle.
 	}
 }
 
@@ -204,10 +287,8 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	}
 	tc.syncMutex.Unlock()
 
-	// Signal that a sync cycle has completed (used for testing, only).
-	select {
-	case tc.syncDoneChan <- struct{}{}:
-	default: // No blocking.
+	if tc.listener != nil {
+		tc.listener.OnTreeSynced()
 	}
 
 	// Process watch events until the context is canceled, watching is stopped, or an error occurs.
@@ -230,7 +311,30 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 						tc.updateStat(filepath.Dir(subPath), stat)
 					}
 				}
-				fallthrough // Also update stat and data of changed node.
+				if tc.includeData {
+					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
+					if err != nil {
+						if err == ErrNoNode {
+							continue // We'll get an EventNodeDeleted later.
+						}
+						return err // We are out of sync.
+					}
+					tc.put(subPath, stat, data)
+					if tc.listener != nil {
+						tc.listener.OnNodeCreated(subPath, data, stat)
+					}
+				} else {
+					found, stat, err := tc.conn.ExistsCtx(ctx, e.Path)
+					if err != nil {
+						return err // We are out of sync.
+					}
+					if found {
+						tc.put(subPath, stat, nil)
+						if tc.listener != nil {
+							tc.listener.OnNodeCreated(subPath, nil, stat)
+						}
+					} // else, we'll get an EventNodeDeleted later.
+				}
 			case EventNodeDataChanged:
 				if tc.includeData {
 					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
@@ -241,6 +345,9 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 						return err // We are out of sync.
 					}
 					tc.put(subPath, stat, data)
+					if tc.listener != nil {
+						tc.listener.OnNodeDataChanged(subPath, data, stat)
+					}
 				} else {
 					found, stat, err := tc.conn.ExistsCtx(ctx, e.Path)
 					if err != nil {
@@ -248,6 +355,9 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					}
 					if found {
 						tc.put(subPath, stat, nil)
+						if tc.listener != nil {
+							tc.listener.OnNodeDataChanged(subPath, nil, stat)
+						}
 					} // else, we'll get an EventNodeDeleted later.
 				}
 			case EventNodeDeleted:
@@ -262,6 +372,9 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					} // else, we'll get an EventNodeDeleted later.
 				}
 				tc.delete(subPath)
+				if tc.listener != nil {
+					tc.listener.OnNodeDeleted(subPath)
+				}
 			case EventNotWatching:
 				return fmt.Errorf("watch was closed by server")
 			}

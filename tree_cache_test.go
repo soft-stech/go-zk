@@ -546,7 +546,14 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 				t.Fatalf("failed to create node %s: %v", "/test-tree-cache", err)
 			}
 
-			cache := NewTreeCache(c1, "/test-tree-cache", WithTreeCacheIncludeData(true))
+			syncDoneChan := make(chan struct{}, 1)
+
+			cache := NewTreeCache(c1, "/test-tree-cache",
+				WithTreeCacheIncludeData(true),
+				WithTreeCacheListener(&TreeCacheListenerFuncs{
+					OnSyncStoppedFunc: func() { close(syncDoneChan) },
+					OnTreeSyncedFunc:  func() { syncDoneChan <- struct{}{} },
+				}))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 
@@ -566,7 +573,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 
 			// Eat the first item from syncDoneChan (initial sync).
 			select {
-			case <-cache.syncDoneChan:
+			case <-syncDoneChan:
 			default:
 			}
 
@@ -589,7 +596,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 
 			// Wait for second item from syncDoneChan (sync after reconnection).
 			select {
-			case <-cache.syncDoneChan:
+			case <-syncDoneChan:
 			case <-ctx.Done():
 				t.Fatalf("failed to wait for syncDoneChan: %v", ctx.Err())
 			}

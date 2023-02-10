@@ -46,7 +46,7 @@ type Dialer func(network, address string, timeout time.Duration) (net.Conn, erro
 
 // Logger is an interface that can be implemented to provide custom log output.
 type Logger interface {
-	Printf(string, ...interface{})
+	Printf(string, ...any)
 }
 
 type authCreds struct {
@@ -108,8 +108,8 @@ type connOption func(c *Conn)
 type request struct {
 	xid        int32
 	opcode     int32
-	pkt        interface{}
-	recvStruct interface{}
+	pkt        any
+	recvStruct any
 	recvChan   chan response
 
 	// Because sending and receiving happen in separate go routines, there's
@@ -303,7 +303,7 @@ func (c *Conn) Close() {
 		close(c.shouldQuit)
 
 		select {
-		case <-c.queueRequest(context.Background(), opClose, &closeRequest{}, &closeResponse{}, nil):
+		case <-c.queueRequest(context.Background(), opClose, nil, nil, nil):
 		case <-time.After(time.Second):
 		}
 	})
@@ -386,8 +386,8 @@ func (c *Conn) connect() error {
 
 func (c *Conn) sendRequest(
 	opcode int32,
-	req interface{},
-	res interface{},
+	req any,
+	res any,
 	recvFunc func(*request, *responseHeader, error),
 ) (
 	<-chan response,
@@ -698,13 +698,12 @@ func (c *Conn) restoreWatches() {
 	}
 
 	go func() {
-		res := &setWatches2Response{}
 		// TODO: Pipeline these so queue all of them up before waiting on any
 		// response. That will require some investigation to make sure there
 		// aren't failure modes where a blocking write to the channel of requests
 		// could hang indefinitely and cause this goroutine to leak...
 		for _, req = range reqs {
-			_, err := c.request(context.Background(), opSetWatches2, req, res, nil)
+			_, err := c.request(context.Background(), opSetWatches2, req, nil, nil)
 			if err != nil {
 				c.logger.Printf("failed to set previous watches: %v", err)
 				break
@@ -782,13 +781,15 @@ func (c *Conn) sendData(req *request) error {
 		return nil
 	}
 
-	n2, err := encodePacket(c.buf[4+n:], req.pkt)
-	if err != nil {
-		req.recvChan <- response{-1, err}
-		return nil
+	if req.pkt != nil { // some requests don't have a body (header only)
+		n2, err := encodePacket(c.buf[4+n:], req.pkt)
+		if err != nil {
+			req.recvChan <- response{-1, err}
+			return nil
+		}
+		n += n2
 	}
 
-	n += n2
 	binary.BigEndian.PutUint32(c.buf[:4], uint32(n))
 
 	c.requestsLock.Lock()
@@ -903,7 +904,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				var err error
 				if res.Err != 0 {
 					err = res.Err.toError()
-				} else {
+				} else if req.recvStruct != nil { // only decode if we have a struct to decode into
 					_, err = decodePacket(buf[16:blen], req.recvStruct)
 				}
 				if req.recvFunc != nil {
@@ -980,7 +981,7 @@ func (c *Conn) removeWatcher(ech <-chan Event) (bool, watcherKey, int) {
 	return false, watcherKey{}, 0 // No watcher found for channel.
 }
 
-func (c *Conn) queueRequest(ctx context.Context, opcode int32, req interface{}, res interface{}, recvFunc func(*request, *responseHeader, error)) <-chan response {
+func (c *Conn) queueRequest(ctx context.Context, opcode int32, req any, res any, recvFunc func(*request, *responseHeader, error)) <-chan response {
 	rq := &request{
 		xid:        c.nextXid(),
 		opcode:     opcode,
@@ -1022,7 +1023,7 @@ func (c *Conn) queueRequest(ctx context.Context, opcode int32, req interface{}, 
 	return rq.recvChan
 }
 
-func (c *Conn) request(ctx context.Context, opcode int32, req interface{}, res interface{}, recvFunc func(*request, *responseHeader, error)) (int64, error) {
+func (c *Conn) request(ctx context.Context, opcode int32, req any, res any, recvFunc func(*request, *responseHeader, error)) (int64, error) {
 	recv := c.queueRequest(ctx, opcode, req, res, recvFunc)
 	select {
 	case r := <-recv:
@@ -1046,7 +1047,7 @@ func (c *Conn) AddAuth(scheme string, auth []byte) error {
 
 // AddAuthCtx adds an authentication config to the connection.
 func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error {
-	_, err := c.request(ctx, opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, &setAuthResponse{}, nil)
+	_, err := c.request(ctx, opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, nil, nil)
 
 	if err != nil {
 		return err
@@ -1095,8 +1096,7 @@ func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, opt
 		opt(&wopts)
 	}
 
-	res := &addWatchResponse{}
-	_, err := c.request(ctx, opAddWatch, &addWatchRequest{Path: path, Mode: mode}, res, func(req *request, res *responseHeader, err error) {
+	_, err := c.request(ctx, opAddWatch, &addWatchRequest{Path: path, Mode: mode}, nil, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, kind, wopts)
 		}
@@ -1128,7 +1128,6 @@ func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 	if remaining == 0 {
 		// No more watchers remain for the watcherKey, so we can remove the watch from the server.
 		req := &removeWatchesRequest{Path: key.path}
-		res := &removeWatchesResponse{}
 		switch key.kind {
 		case watcherKindData:
 			req.Type = removeWatchTypeData
@@ -1137,7 +1136,7 @@ func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 		default:
 			req.Type = removeWatchTypePersistent
 		}
-		_, err := c.request(ctx, opRemoveWatches, req, res, nil)
+		_, err := c.request(ctx, opRemoveWatches, req, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -1201,7 +1200,7 @@ func (c *Conn) GetCtx(ctx context.Context, path string) ([]byte, *Stat, error) {
 	}
 
 	res := &getDataResponse{}
-	_, err := c.request(ctx, opGetData, &getDataRequest{Path: path, Watch: false}, res, nil)
+	_, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: false}, res, nil)
 	if err == ErrConnectionClosed {
 		return nil, nil, err
 	}
@@ -1221,7 +1220,7 @@ func (c *Conn) GetWCtx(ctx context.Context, path string) ([]byte, *Stat, <-chan 
 
 	var ech <-chan Event
 	res := &getDataResponse{}
-	_, err := c.request(ctx, opGetData, &getDataRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
+	_, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
 		}
@@ -1382,7 +1381,7 @@ func (c *Conn) DeleteCtx(ctx context.Context, path string, version int32) error 
 		return err
 	}
 
-	_, err := c.request(ctx, opDelete, &DeleteRequest{path, version}, &deleteResponse{}, nil)
+	_, err := c.request(ctx, opDelete, &DeleteRequest{path, version}, nil, nil)
 	return err
 }
 
@@ -1502,28 +1501,31 @@ func (c *Conn) SyncCtx(ctx context.Context, path string) (string, error) {
 	return res.Path, err
 }
 
-// MultiResponse is the result of a Multi call.
+// MultiResponse is the result of a Multi or MultiRead call.
 type MultiResponse struct {
-	Stat   *Stat
-	String string
-	Error  error
+	Path     string   // The path of the znode. Only set for CreateRequest.
+	Children []string // The children of the znode. Only set for GetChildrenRequest.
+	Stat     *Stat    // The stat of the znode. Only set for CreateRequest and SetDataRequest
+	Data     []byte   // The data of the znode. Only set for GetDataRequest.
+	Error    error    // The error of the operation. Applies to all request types.
 }
 
 // Multi executes multiple ZooKeeper operations or none of them. The provided
 // ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
 // *CheckVersionRequest.
-func (c *Conn) Multi(ops ...interface{}) ([]MultiResponse, error) {
+func (c *Conn) Multi(ops ...any) ([]MultiResponse, error) {
 	return c.MultiCtx(context.Background(), ops...)
 }
 
 // MultiCtx executes multiple ZooKeeper operations or none of them. The provided
 // ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
 // *CheckVersionRequest.
-func (c *Conn) MultiCtx(ctx context.Context, ops ...interface{}) ([]MultiResponse, error) {
+func (c *Conn) MultiCtx(ctx context.Context, ops ...any) ([]MultiResponse, error) {
 	req := &multiRequest{
 		Ops:        make([]multiRequestOp, 0, len(ops)),
 		DoneHeader: multiHeader{Type: -1, Done: true, Err: -1},
 	}
+
 	for _, op := range ops {
 		var opCode int32
 		switch op.(type) {
@@ -1536,18 +1538,87 @@ func (c *Conn) MultiCtx(ctx context.Context, ops ...interface{}) ([]MultiRespons
 		case *CheckVersionRequest:
 			opCode = opCheck
 		default:
-			return nil, fmt.Errorf("unknown operation type %T", op)
+			return nil, fmt.Errorf("operation type %T is not supported by multi", op)
 		}
 		req.Ops = append(req.Ops, multiRequestOp{multiHeader{opCode, false, -1}, op})
 	}
+
 	res := &multiResponse{}
 	_, err := c.request(ctx, opMulti, req, res, nil)
 	if err == ErrConnectionClosed {
 		return nil, err
 	}
+
 	mr := make([]MultiResponse, len(res.Ops))
 	for i, op := range res.Ops {
-		mr[i] = MultiResponse{Stat: op.Stat, String: op.String, Error: op.Err.toError()}
+		mr[i] = MultiResponse{Error: op.Err.toError()}
+		if mr[i].Error != nil {
+			continue // No other fields expected to be set.
+		}
+		switch op.Header.Type {
+		case opCreate:
+			if r, ok := op.Resp.(*createResponse); ok {
+				mr[i].Path = r.Path
+			}
+		case opSetData:
+			if r, ok := op.Resp.(*setDataResponse); ok {
+				mr[i].Stat = &r.Stat
+			}
+		}
+	}
+	return mr, err
+}
+
+// MultiRead executes multiple ZooKeeper read operations.
+// The provided ops must be one of *GetDataRequest or *GetChildrenRequest.
+// A MultiResponse will be returned for each op, with data or children.
+func (c *Conn) MultiRead(ops ...any) ([]MultiResponse, error) {
+	return c.MultiReadCtx(context.Background(), ops...)
+}
+
+// MultiReadCtx executes multiple ZooKeeper read operations.
+// The provided ops must be one of *GetDataRequest or *GetChildrenRequest.
+func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, error) {
+	req := &multiRequest{
+		Ops:        make([]multiRequestOp, 0, len(ops)),
+		DoneHeader: multiHeader{Type: -1, Done: true, Err: -1},
+	}
+
+	for _, op := range ops {
+		var opCode int32
+		switch op.(type) {
+		case *GetDataRequest:
+			opCode = opGetData
+		case *GetChildrenRequest:
+			opCode = opGetChildren
+		default:
+			return nil, fmt.Errorf("operation type %T is not supported by multi", op)
+		}
+		req.Ops = append(req.Ops, multiRequestOp{multiHeader{opCode, false, -1}, op})
+	}
+
+	res := &multiResponse{}
+	_, err := c.request(ctx, opMultiRead, req, res, nil)
+	if err == ErrConnectionClosed {
+		return nil, err
+	}
+
+	mr := make([]MultiResponse, len(res.Ops))
+	for i, op := range res.Ops {
+		mr[i] = MultiResponse{Error: op.Err.toError()}
+		if mr[i].Error != nil {
+			continue // No other fields expected to be set.
+		}
+		switch op.Header.Type {
+		case opGetData:
+			if r, ok := op.Resp.(*getDataResponse); ok {
+				mr[i].Data = r.Data
+			}
+		case opGetChildren:
+			if r, ok := op.Resp.(*getChildrenResponse); ok {
+				mr[i].Children = r.Children
+			}
+		}
 	}
 	return mr, err
 }
@@ -1617,6 +1688,15 @@ func (c *Conn) Server() string {
 	return c.server
 }
 
+// TreeWalker returns an object that is used to traverse the tree of nodes rooted at the given path.
+func (c *Conn) TreeWalker(path string) TreeWalker {
+	return InitTreeWalker(c.ChildrenCtx, path)
+}
+
+func (c *Conn) BatchTreeWalker(path string) *BatchTreeWalker {
+	return InitBatchTreeWalker(c, path)
+}
+
 func resendZkAuth(ctx context.Context, c *Conn) error {
 	shouldCancel := func() bool {
 		select {
@@ -1649,7 +1729,7 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 				Scheme: cred.scheme,
 				Auth:   cred.auth,
 			},
-			&setAuthResponse{},
+			nil, /* res*/
 			nil, /* recvFunc*/
 		)
 		if err != nil {
@@ -1674,9 +1754,4 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 	}
 
 	return nil
-}
-
-// TreeWalker returns an object that is used to traverse the tree of nodes rooted at the given path.
-func (c *Conn) TreeWalker(path string) TreeWalker {
-	return InitTreeWalker(c.ChildrenCtx, path)
 }

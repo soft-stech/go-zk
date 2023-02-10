@@ -30,6 +30,7 @@ const (
 	opRemoveWatches   = 18
 	opCreateContainer = 19
 	opCreateTTL       = 21
+	opMultiRead       = 22
 	opClose           = -11
 	opSetAuth         = 100
 	opSetWatches      = 101
@@ -173,7 +174,7 @@ var (
 	ErrInvalidCallback         = errors.New("zk: invalid callback specified")
 
 	errCodeToError = map[ErrCode]error{
-		0:                          nil,
+		errOk:                      nil,
 		errAPIError:                ErrAPIError,
 		errNoNode:                  ErrNoNode,
 		errNoAuth:                  ErrNoAuth,
@@ -263,6 +264,7 @@ var (
 		opGetChildren2:    "getChildren2",
 		opCheck:           "check",
 		opMulti:           "multi",
+		opMultiRead:       "multiRead",
 		opReconfig:        "reconfig",
 		opClose:           "close",
 		opSetAuth:         "setAuth",

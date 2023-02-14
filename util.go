@@ -144,3 +144,15 @@ func safeResetTimer(tm *time.Timer, d time.Duration) {
 	}
 	tm.Reset(d)
 }
+
+func slicesEqual[T comparable](a, b []T) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

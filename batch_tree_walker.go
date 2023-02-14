@@ -5,20 +5,19 @@ import (
 	gopath "path"
 )
 
-const (
-	treeWalkerDefaultBatchSize = 64
-)
-
 type BatchVisitorFunc func(paths []string) error
 
 type BatchVisitorCtxFunc func(ctx context.Context, paths []string) error
 
-// InitBatchTreeWalker initializes a BatchTreeWalker with the given fetcher function and root path.
-func InitBatchTreeWalker(conn *Conn, path string) *BatchTreeWalker {
+// NewBatchTreeWalker returns a new BatchTreeWalker for the given connection, root path and batch size.
+func NewBatchTreeWalker(conn *Conn, path string, batchSize int) *BatchTreeWalker {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
 	return &BatchTreeWalker{
 		conn:      conn,
 		path:      path,
-		batchSize: treeWalkerDefaultBatchSize,
+		batchSize: batchSize,
 	}
 }
 
@@ -27,15 +26,6 @@ type BatchTreeWalker struct {
 	conn      *Conn
 	path      string
 	batchSize int
-}
-
-// WithBatchSize sets the batch size for fetching children.
-func (w *BatchTreeWalker) WithBatchSize(batchSize int) *BatchTreeWalker {
-	if batchSize <= 0 {
-		batchSize = 1
-	}
-	w.batchSize = batchSize
-	return w
 }
 
 // Walk begins traversing the tree and calls the visitor function for each node visited.

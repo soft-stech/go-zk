@@ -1613,6 +1613,7 @@ func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, e
 		case opGetData:
 			if r, ok := op.Resp.(*getDataResponse); ok {
 				mr[i].Data = r.Data
+				mr[i].Stat = &r.Stat
 			}
 		case opGetChildren:
 			if r, ok := op.Resp.(*getChildrenResponse); ok {
@@ -1688,13 +1689,18 @@ func (c *Conn) Server() string {
 	return c.server
 }
 
-// TreeWalker returns an object that is used to traverse the tree of nodes rooted at the given path.
-func (c *Conn) TreeWalker(path string) TreeWalker {
-	return InitTreeWalker(c.ChildrenCtx, path)
+// Walker returns a new TreeWalker used to traverse the tree of nodes at the given path.
+// Nodes are traversed in breadth-first order, one at a time.
+// For large trees, use BatchWalker instead.
+func (c *Conn) Walker(path string) *TreeWalker {
+	return NewTreeWalker(c.ChildrenCtx, path)
 }
 
-func (c *Conn) BatchTreeWalker(path string) *BatchTreeWalker {
-	return InitBatchTreeWalker(c, path)
+// BatchWalker returns a new BatchTreeWalker used to traverse the tree of nodes at the given path.
+// Nodes are traversed in breadth-first order, in batches up to the given size.
+// This method is more efficient than Walker when the number of nodes is large.
+func (c *Conn) BatchWalker(path string, batchSize int) *BatchTreeWalker {
+	return NewBatchTreeWalker(c, path, batchSize)
 }
 
 func resendZkAuth(ctx context.Context, c *Conn) error {

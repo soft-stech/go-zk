@@ -482,30 +482,24 @@ func TestMultiRead(t *testing.T) {
 				t.Fatalf("MultiRead returned error: %+v", err)
 			} else if len(res) != 4 {
 				t.Fatalf("Expected 4 responses got %d", len(res))
-				// Check children
 			} else if res[0].Error != nil {
 				t.Fatalf("GetChildren returned error: %+v", res[0].Error)
-			} else if len(res[0].Children) != 1 {
-				t.Fatalf("GetChildren returned wrong number of children: %d", len(res[0].Children))
-			} else if res[0].Children[0] != "a" {
-				t.Fatalf("GetChildren returned wrong child: %s", res[0].Children[0])
+			} else if !slicesEqual(res[0].Children, []string{"a"}) {
+				t.Fatalf("GetChildren returned wrong children: %+v", res[0].Children)
 			} else if res[1].Error != nil {
 				t.Fatalf("GetChildren returned error: %+v", res[1].Error)
-			} else if len(res[1].Children) != 2 {
-				t.Fatalf("GetChildren returned wrong number of children: %d", len(res[1].Children))
-			} else if res[1].Children[0] != "b" {
-				t.Fatalf("GetChildren returned wrong child: %s", res[1].Children[0])
-			} else if res[1].Children[1] != "c" {
-				t.Fatalf("GetChildren returned wrong child: %s", res[1].Children[1])
+			} else if !slicesEqual(res[1].Children, []string{"b", "c"}) {
+				t.Fatalf("GetChildren returned wrong children: %+v", res[1].Children)
 			} else if res[2].Error != nil {
 				t.Fatalf("GetChildren returned error: %+v", res[2].Error)
 			} else if len(res[2].Children) != 0 {
 				t.Fatalf("GetChildren returned wrong number of children: %d", len(res[2].Children))
-				// Check data
 			} else if res[3].Error != nil {
 				t.Fatalf("GetData returned error: %+v", res[3].Error)
-			} else if len(res[3].Data) != 4 {
-				t.Fatalf("GetData returned wrong size data: %d", len(res[3].Data))
+			} else if res[3].Stat == nil {
+				t.Fatal("GetData returned nil stat")
+			} else if !slicesEqual(res[3].Data, []byte{1, 2, 3, 4}) {
+				t.Fatalf("GetData returned wrong data: %+v", res[3].Data)
 			} else {
 				t.Logf("%+v", res)
 			}
@@ -2096,94 +2090,7 @@ func TestMaxBufferSize(t *testing.T) {
 	})
 }
 
-func TestCachedLeavesWalker(t *testing.T) {
-	t.Parallel()
-
-	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
-		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			paths := []string{
-				"/gozk-test-cachedleaveswalker",
-				"/gozk-test-cachedleaveswalker/a",
-				"/gozk-test-cachedleaveswalker/a/b",
-				"/gozk-test-cachedleaveswalker/a/c",
-				"/gozk-test-cachedleaveswalker/a/c/d",
-				"/gozk-test-ignoreme",
-				"/gozk-test-ignoreme/a",
-			}
-			for _, p := range paths {
-				if path, err := c.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-					t.Fatalf("Create returned error: %+v", err)
-				} else if path != p {
-					t.Fatalf("Create returned different path '%s' != '%s'", path, p)
-				}
-			}
-
-			walker, err := NewCachedLeavesWalker(c, "/gozk-test-cachedleaveswalker")
-			if err != nil {
-				t.Fatalf("AddCachedLeavesWalker returned error: %+v", err)
-			}
-
-			var visited []string
-			err = walker.WalkLeaves(func(p string) error {
-				visited = append(visited, p)
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("WalkLeaves returned error: %+v", err)
-			}
-			expected := []string{
-				"/gozk-test-cachedleaveswalker/a/b",
-				"/gozk-test-cachedleaveswalker/a/c/d",
-			}
-			sort.Strings(expected)
-			sort.Strings(visited) // Order doesn't matter
-			if !reflect.DeepEqual(visited, expected) {
-				t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
-			}
-
-			paths = []string{
-				"/gozk-test-cachedleaveswalker/b",
-				"/gozk-test-cachedleaveswalker/b/b",
-				"/gozk-test-cachedleaveswalker/b/c",
-				"/gozk-test-cachedleaveswalker/b/c/d",
-			}
-			for _, p := range paths {
-				if path, err := c.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-					t.Fatalf("Create returned error: %+v", err)
-				} else if path != p {
-					t.Fatalf("Create returned different path '%s' != '%s'", path, p)
-				}
-			}
-
-			if err := c.Delete("/gozk-test-cachedleaveswalker/a/b", -1); err != nil {
-				t.Fatalf("Delete returned error: %+v", err)
-			}
-
-			time.Sleep(time.Millisecond * 100)
-
-			visited = []string{}
-			err = walker.WalkLeaves(func(p string) error {
-				visited = append(visited, p)
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("WalkLeaves returned error: %+v", err)
-			}
-			expected = []string{
-				"/gozk-test-cachedleaveswalker/a/c/d",
-				"/gozk-test-cachedleaveswalker/b/b",
-				"/gozk-test-cachedleaveswalker/b/c/d",
-			}
-			sort.Strings(expected)
-			sort.Strings(visited) // Order doesn't matter
-			if !reflect.DeepEqual(visited, expected) {
-				t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
-			}
-		})
-	})
-}
-
-func TestBatchTreeWalker(t *testing.T) {
+func TestBatchWalker(t *testing.T) {
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			startTime := time.Now()
@@ -2193,7 +2100,7 @@ func TestBatchTreeWalker(t *testing.T) {
 			sort.Strings(paths) // Sort so we can compare the results later.
 
 			runTest := func(t *testing.T, batchSize int) {
-				walker := c.BatchTreeWalker("/gozk-test-batchtreewalker").WithBatchSize(batchSize)
+				walker := c.BatchWalker("/gozk-test-batchtreewalker", batchSize)
 
 				startTime := time.Now()
 				var visited []string

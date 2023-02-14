@@ -5,8 +5,10 @@ import (
 	gopath "path"
 )
 
+// BatchVisitorFunc is a function that is called for each batch of nodes visited.
 type BatchVisitorFunc func(paths []string) error
 
+// BatchVisitorCtxFunc is like BatchVisitorFunc, but it takes a context.
 type BatchVisitorCtxFunc func(ctx context.Context, paths []string) error
 
 // NewBatchTreeWalker returns a new BatchTreeWalker for the given connection, root path and batch size.
@@ -21,7 +23,9 @@ func NewBatchTreeWalker(conn *Conn, path string, batchSize int) *BatchTreeWalker
 	}
 }
 
-// BatchTreeWalker provides flexible traversal of a tree of nodes rooted at a specific path.
+// BatchTreeWalker provides traversal of a tree of nodes rooted at a specific path.
+// It fetches children in batches to reduce the number of round trips.
+// The batch size is configurable.
 type BatchTreeWalker struct {
 	conn      *Conn
 	path      string
@@ -70,6 +74,9 @@ func (w *BatchTreeWalker) WalkChanCtx(ctx context.Context, bufferSize int) <-cha
 	return ch
 }
 
+// walkBatch recursively walks the tree in batches.
+// It calls the visitor function for each batch of nodes visited.
+// It fetches children in batches to reduce the number of round trips.
 func (w *BatchTreeWalker) walkBatch(ctx context.Context, paths []string, visitor BatchVisitorCtxFunc) error {
 	// Execute the visitor function on all paths.
 	if err := visitor(ctx, paths); err != nil {
@@ -108,6 +115,7 @@ func (w *BatchTreeWalker) walkBatch(ctx context.Context, paths []string, visitor
 	return nil
 }
 
+// fetchChildrenBatch fetches the children of all paths in a single batch.
 func (w *BatchTreeWalker) fetchChildrenBatch(ctx context.Context, paths []string) ([][]string, error) {
 	requests := make([]any, len(paths))
 	for i, p := range paths {

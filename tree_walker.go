@@ -37,7 +37,6 @@ type TreeWalker struct {
 }
 
 // Walk begins traversing the tree and calls the visitor function for each node visited.
-// Note: The DepthFirstParallel and BreadthFirstParallel traversals require the visitor function to be thread-safe.
 func (w *TreeWalker) Walk(visitor VisitorFunc) error {
 	// Adapt VisitorFunc to VisitorCtxFunc.
 	vc := func(ctx context.Context, path string, stat *Stat) error {

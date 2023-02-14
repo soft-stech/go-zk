@@ -32,8 +32,8 @@ func TestTreeWalker(t *testing.T) {
 			}
 
 			// Test Walk with visitor.
-			t.Run("Walk", func(t *testing.T) {
-				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker")
+			t.Run("Walk_BreadthFirstOrder", func(t *testing.T) {
+				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker", BreadthFirstOrder)
 
 				var visited []string
 				err := w.Walk(func(path string, _ *Stat) error {
@@ -44,12 +44,41 @@ func TestTreeWalker(t *testing.T) {
 					t.Fatalf("Walk returned an error: %+v", err)
 				}
 
-				expectVisitedExact(t, paths, visited)
+				expected := []string{
+					"/gozk-test-walker",
+					"/gozk-test-walker/a",
+					"/gozk-test-walker/a/b",
+					"/gozk-test-walker/a/c",
+					"/gozk-test-walker/a/c/d",
+				}
+				expectVisitedExact(t, expected, visited)
+			})
+
+			t.Run("Walk_DepthFirstOrder", func(t *testing.T) {
+				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker", DepthFirstOrder)
+
+				var visited []string
+				err := w.Walk(func(path string, _ *Stat) error {
+					visited = append(visited, path)
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("Walk returned an error: %+v", err)
+				}
+
+				expected := []string{
+					"/gozk-test-walker/a/b",
+					"/gozk-test-walker/a/c/d",
+					"/gozk-test-walker/a/c",
+					"/gozk-test-walker/a",
+					"/gozk-test-walker",
+				}
+				expectVisitedExact(t, expected, visited)
 			})
 
 			// Test the walk with channel events.
-			t.Run("WalkChan", func(t *testing.T) {
-				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker")
+			t.Run("WalkChan_BreadthFirstOrder", func(t *testing.T) {
+				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker", BreadthFirstOrder)
 
 				var visited []string
 				ch := w.WalkChan(1)
@@ -60,7 +89,37 @@ func TestTreeWalker(t *testing.T) {
 					visited = append(visited, e.Path)
 				}
 
-				expectVisitedExact(t, paths, visited)
+				expected := []string{
+					"/gozk-test-walker",
+					"/gozk-test-walker/a",
+					"/gozk-test-walker/a/b",
+					"/gozk-test-walker/a/c",
+					"/gozk-test-walker/a/c/d",
+				}
+				expectVisitedExact(t, expected, visited)
+			})
+
+			// Test the walk with channel events.
+			t.Run("WalkChan_DepthFirstOrder", func(t *testing.T) {
+				w := NewTreeWalker(c.ChildrenCtx, "/gozk-test-walker", DepthFirstOrder)
+
+				var visited []string
+				ch := w.WalkChan(1)
+				for e := range ch {
+					if e.Err != nil {
+						t.Fatalf("WalkChan returned an error: %+v", e.Err)
+					}
+					visited = append(visited, e.Path)
+				}
+
+				expected := []string{
+					"/gozk-test-walker/a/b",
+					"/gozk-test-walker/a/c/d",
+					"/gozk-test-walker/a/c",
+					"/gozk-test-walker/a",
+					"/gozk-test-walker",
+				}
+				expectVisitedExact(t, expected, visited)
 			})
 		})
 	})

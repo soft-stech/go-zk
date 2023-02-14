@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	"fmt"
 	gopath "path"
 )
 
@@ -22,11 +23,21 @@ type VisitEvent struct {
 	Err  error
 }
 
+type TraversalOrder int
+
+const (
+	// BreadthFirstOrder indicates that the tree should be traversed in breadth-first order.
+	BreadthFirstOrder TraversalOrder = iota
+	// DepthFirstOrder indicates that the tree should be traversed in depth-first order.
+	DepthFirstOrder
+)
+
 // NewTreeWalker creates a new TreeWalker with the given fetcher function and root path.
-func NewTreeWalker(fetcher ChildrenFunc, path string) *TreeWalker {
+func NewTreeWalker(fetcher ChildrenFunc, path string, order TraversalOrder) *TreeWalker {
 	return &TreeWalker{
 		fetcher: fetcher,
 		path:    path,
+		order:   order,
 	}
 }
 
@@ -34,6 +45,7 @@ func NewTreeWalker(fetcher ChildrenFunc, path string) *TreeWalker {
 type TreeWalker struct {
 	fetcher ChildrenFunc
 	path    string
+	order   TraversalOrder
 }
 
 // Walk begins traversing the tree and calls the visitor function for each node visited.
@@ -47,7 +59,14 @@ func (w *TreeWalker) Walk(visitor VisitorFunc) error {
 
 // WalkCtx is like Walk, but takes a context that can be used to cancel the walk.
 func (w *TreeWalker) WalkCtx(ctx context.Context, visitor VisitorCtxFunc) error {
-	return w.walkBreadthFirst(ctx, w.path, visitor)
+	switch w.order {
+	case BreadthFirstOrder:
+		return w.walkBreadthFirst(ctx, w.path, visitor)
+	case DepthFirstOrder:
+		return w.walkDepthFirst(ctx, w.path, visitor)
+	default:
+		return fmt.Errorf("unknown traversal order: %d", w.order)
+	}
 }
 
 // WalkChan begins traversing the tree and sends the results to the returned channel.
@@ -76,10 +95,6 @@ func (w *TreeWalker) WalkChanCtx(ctx context.Context, bufferSize int) <-chan Vis
 
 // walkBreadthFirst walks the tree rooted at path in breadth-first order.
 func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
 	children, stat, err := w.fetcher(ctx, path)
 	if err != nil {
 		if err == ErrNoNode {
@@ -97,6 +112,30 @@ func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor 
 		if err = w.walkBreadthFirst(ctx, childPath, visitor); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// walkDepthFirst walks the tree rooted at path in depth-first order.
+func (w *TreeWalker) walkDepthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
+	children, stat, err := w.fetcher(ctx, path)
+	if err != nil {
+		if err == ErrNoNode {
+			return nil // Ignore ErrNoNode.
+		}
+		return err
+	}
+
+	for _, child := range children {
+		childPath := gopath.Join(path, child)
+		if err = w.walkDepthFirst(ctx, childPath, visitor); err != nil {
+			return err
+		}
+	}
+
+	if err = visitor(ctx, path, stat); err != nil {
+		return err
 	}
 
 	return nil

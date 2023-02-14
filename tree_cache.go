@@ -534,11 +534,11 @@ func (tc *TreeCache) Children(path string) ([]string, *Stat, error) {
 	return children, n.stat, nil
 }
 
-func (tc *TreeCache) Walker(path string) *TreeWalker {
+func (tc *TreeCache) Walker(path string, order TraversalOrder) *TreeWalker {
 	fetcher := func(_ context.Context, path string) ([]string, *Stat, error) {
 		return tc.Children(path)
 	}
-	return NewTreeWalker(fetcher, path)
+	return NewTreeWalker(fetcher, path, order)
 }
 
 // toInternalPath translates the given external path to a path relative to root node of the cache.

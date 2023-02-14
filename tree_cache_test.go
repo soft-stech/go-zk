@@ -215,7 +215,7 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 
 			// Walking from root.
 			var visited []string
-			walker := cache.Walker("/")
+			walker := cache.Walker("/", BreadthFirstOrder)
 			err = walker.Walk(func(path string, stat *Stat) error {
 				visited = append(visited, path)
 				return nil
@@ -349,7 +349,7 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 
 			// Walking from root.
 			var visited []string
-			walker := cache.Walker("/test-tree-cache")
+			walker := cache.Walker("/test-tree-cache", BreadthFirstOrder)
 			err = walker.Walk(func(path string, stat *Stat) error {
 				visited = append(visited, path)
 				return nil

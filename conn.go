@@ -1690,10 +1690,10 @@ func (c *Conn) Server() string {
 }
 
 // Walker returns a new TreeWalker used to traverse the tree of nodes at the given path.
-// Nodes are traversed in breadth-first order, one at a time.
+// Nodes are traversed in the specified order (depth-first or breadth-first).
 // For large trees, use BatchWalker instead.
-func (c *Conn) Walker(path string) *TreeWalker {
-	return NewTreeWalker(c.ChildrenCtx, path)
+func (c *Conn) Walker(path string, order TraversalOrder) *TreeWalker {
+	return NewTreeWalker(c.ChildrenCtx, path, order)
 }
 
 // BatchWalker returns a new BatchTreeWalker used to traverse the tree of nodes at the given path.

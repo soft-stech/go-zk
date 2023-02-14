@@ -71,12 +71,16 @@ type TreeCacheListener interface {
 	OnSyncStarted()
 
 	// OnSyncStopped is called when the tree cache has stopped its sync loop.
-	OnSyncStopped()
+	// The error causing the stop is passed as an argument.
+	OnSyncStopped(err error)
+
+	// OnSyncError is called when the tree cache encounters an error during sync, prompting a retry.
+	OnSyncError(err error)
 
 	// OnTreeSynced is called when the tree cache has completed a full sync of state.
 	// This is called once after the tree cache is started, and again after each subsequent sync cycle.
 	// A new sync cycle is triggered by connection loss or watch failure.
-	OnTreeSynced()
+	OnTreeSynced(elapsed time.Duration)
 
 	// OnNodeCreated is called when a node is created after last full sync.
 	OnNodeCreated(path string, data []byte, stat *Stat)
@@ -92,8 +96,9 @@ type TreeCacheListener interface {
 // Any callback that is nil is ignored.
 type TreeCacheListenerFuncs struct {
 	OnSyncStartedFunc     func()
-	OnSyncStoppedFunc     func()
-	OnTreeSyncedFunc      func()
+	OnSyncStoppedFunc     func(err error)
+	OnSyncErrorFunc       func(err error)
+	OnTreeSyncedFunc      func(elapsed time.Duration)
 	OnNodeCreatedFunc     func(path string, data []byte, stat *Stat)
 	OnNodeDeletedFunc     func(path string)
 	OnNodeDataChangedFunc func(path string, data []byte, stat *Stat)
@@ -105,15 +110,21 @@ func (l *TreeCacheListenerFuncs) OnSyncStarted() {
 	}
 }
 
-func (l *TreeCacheListenerFuncs) OnSyncStopped() {
+func (l *TreeCacheListenerFuncs) OnSyncStopped(err error) {
 	if l.OnSyncStoppedFunc != nil {
-		l.OnSyncStoppedFunc()
+		l.OnSyncStoppedFunc(err)
 	}
 }
 
-func (l *TreeCacheListenerFuncs) OnTreeSynced() {
+func (l *TreeCacheListenerFuncs) OnSyncError(err error) {
+	if l.OnSyncErrorFunc != nil {
+		l.OnSyncErrorFunc(err)
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnTreeSynced(elapsed time.Duration) {
 	if l.OnTreeSyncedFunc != nil {
-		l.OnTreeSyncedFunc()
+		l.OnTreeSyncedFunc(elapsed)
 	}
 }
 
@@ -181,7 +192,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 		}
 
 		if tc.listener != nil {
-			tc.listener.OnSyncStopped()
+			tc.listener.OnSyncStopped(err)
 		}
 	}()
 
@@ -206,16 +217,21 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 				tc.logger.Printf("failed to check if path exists: %v", err)
 				continue // Re-check conditions.
 			}
-			tc.logger.Printf("path does not exist: %s", tc.rootPath)
-			// Wait for the path to be created.
+			// Wait for the path to be created (up to 10 seconds, then re-check conditions).
+			tc.logger.Printf("waiting for path to exist: %s", tc.rootPath)
+			ctxWait, waitCancel := context.WithTimeout(ctx, 10*time.Second)
 			select {
 			case <-existsCh:
-			case <-ctx.Done():
+			case <-ctxWait.Done():
 			}
+			waitCancel()
 			continue //  Re-check conditions.
 		}
 
 		if err := tc.doSync(ctx); err != nil {
+			if tc.listener != nil {
+				tc.listener.OnSyncError(err)
+			}
 			tc.logger.Printf("failed to sync tree cache: %v", err)
 		}
 
@@ -273,6 +289,8 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 		return nil
 	}
 
+	syncStartTime := time.Now()
+
 	// Walk from rootPath to populate our new tree state.
 	if err = tc.conn.BatchWalker(tc.rootPath, 256).
 		WalkCtx(ctx, batchAddNodes); err != nil {
@@ -292,8 +310,10 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	}
 	tc.syncMutex.Unlock()
 
+	syncElapsedTime := time.Since(syncStartTime)
+	tc.logger.Printf("synced tree cache in %s", syncElapsedTime)
 	if tc.listener != nil {
-		tc.listener.OnTreeSynced()
+		tc.listener.OnTreeSynced(syncElapsedTime)
 	}
 
 	// Process watch events until the context is canceled, watching is stopped, or an error occurs.

@@ -545,8 +545,8 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 			cache := NewTreeCache(c1, "/test-tree-cache",
 				WithTreeCacheIncludeData(true),
 				WithTreeCacheListener(&TreeCacheListenerFuncs{
-					OnSyncStoppedFunc: func() { close(syncDoneChan) },
-					OnTreeSyncedFunc:  func() { syncDoneChan <- struct{}{} },
+					OnSyncStoppedFunc: func(_ error) { close(syncDoneChan) },
+					OnTreeSyncedFunc:  func(_ time.Duration) { syncDoneChan <- struct{}{} },
 				}))
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()

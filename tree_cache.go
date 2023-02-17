@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+const (
+	defaultBatchSize = 256
+)
+
 func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCache {
 	tc := &TreeCache{
 		conn:           conn,
@@ -16,6 +20,7 @@ func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCach
 		rootPath:       path,
 		rootNode:       newTreeCacheNode("", &Stat{}, nil),
 		reservoirLimit: defaultReservoirLimit,
+		batchSize:      defaultBatchSize,
 	}
 	for _, option := range options {
 		option(tc)
@@ -24,13 +29,6 @@ func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCach
 }
 
 type TreeCacheOption func(*TreeCache)
-
-// WithTreeCacheLogger returns an option that sets the logger to use for the tree cache.
-func WithTreeCacheLogger(logger Logger) TreeCacheOption {
-	return func(tc *TreeCache) {
-		tc.logger = logger
-	}
-}
 
 // WithTreeCacheIncludeData returns an option to include data in the tree cache.
 func WithTreeCacheIncludeData(includeData bool) TreeCacheOption {
@@ -51,9 +49,32 @@ func WithTreeCacheAbsolutePaths(absolutePaths bool) TreeCacheOption {
 
 // WithTreeCacheReservoirLimit returns an option to use the specified reservoir limit in the tree cache.
 // The reservoir limit is the absolute maximum number of events that can be queued by watchers before being forcefully closed.
-func WithTreeCacheReservoirLimit(reservoirLimit uint32) TreeCacheOption {
+// If the given reservoir limit is <= 0>, the default limit is used.
+func WithTreeCacheReservoirLimit(reservoirLimit int) TreeCacheOption {
 	return func(tc *TreeCache) {
+		if reservoirLimit <= 0 {
+			reservoirLimit = defaultReservoirLimit
+		}
 		tc.reservoirLimit = reservoirLimit
+	}
+}
+
+// WithTreeCacheBatchSize returns an option to use the specified batch size in the tree cache.
+// The batch size determines how many nodes are fetched per request during a tree walk.
+// If the given batch size is <= 0>, the default batch size is used.
+func WithTreeCacheBatchSize(batchSize int) TreeCacheOption {
+	return func(tc *TreeCache) {
+		if batchSize <= 0 {
+			batchSize = defaultBatchSize
+		}
+		tc.batchSize = batchSize
+	}
+}
+
+// WithTreeCacheLogger returns an option that sets the logger to use for the tree cache.
+func WithTreeCacheLogger(logger Logger) TreeCacheOption {
+	return func(tc *TreeCache) {
+		tc.logger = logger
 	}
 }
 
@@ -152,7 +173,8 @@ type TreeCache struct {
 	rootPath          string         // Path to root node being cached.
 	includeData       bool           // true to include data in cache; false to omit.
 	absolutePaths     bool           // true to report full/absolute paths; false to report paths relative to rootPath.
-	reservoirLimit    uint32         // The reservoir size limit for persistent watchers. Defaults to defaultReservoirLimit.
+	reservoirLimit    int            // The reservoir size limit for persistent watchers. Defaults to defaultReservoirLimit.
+	batchSize         int            // The batch size for fetching nodes during a tree walk. Defaults to defaultBatchSize.
 	rootNode          *treeCacheNode // Root node of the tree.
 	treeMutex         sync.RWMutex   // Protects tree state (rootNode and all descendants).
 	syncing           bool           // Set to true while Sync() is running; false otherwise.
@@ -292,8 +314,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	syncStartTime := time.Now()
 
 	// Walk from rootPath to populate our new tree state.
-	if err = tc.conn.BatchWalker(tc.rootPath, 256).
-		WalkCtx(ctx, batchAddNodes); err != nil {
+	if err = tc.conn.BatchWalker(tc.rootPath, tc.batchSize).WalkCtx(ctx, batchAddNodes); err != nil {
 		return err
 	}
 

@@ -14,7 +14,7 @@ type BatchVisitorCtxFunc func(ctx context.Context, paths []string) error
 // NewBatchTreeWalker returns a new BatchTreeWalker for the given connection, root path and batch size.
 func NewBatchTreeWalker(conn *Conn, path string, batchSize int) *BatchTreeWalker {
 	if batchSize <= 0 {
-		batchSize = 1
+		batchSize = 1 // Must be at least 1.
 	}
 	return &BatchTreeWalker{
 		conn:      conn,

@@ -168,6 +168,32 @@ func TestCreateContainer(t *testing.T) {
 	})
 }
 
+func TestDelete(t *testing.T) {
+	t.Parallel()
+
+	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
+			path := "/gozk-test"
+
+			if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+				t.Fatalf("Create returned error: %+v", err)
+			} else if p != path {
+				t.Fatalf("Create returned different path '%s' != '%s'", p, path)
+			}
+
+			// First delete succeeds.
+			if err := c.Delete(path, -1); err != nil {
+				t.Fatalf("Expected no error, but got: %+v", err)
+			}
+
+			// Second delete fails with ErrNoNode.
+			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+				t.Fatalf("Expected ErrNoNode, but got: %+v", err)
+			}
+		})
+	})
+}
+
 func TestIncrementalReconfig(t *testing.T) {
 	if zkVersion := zkVersionFromEnv(); zkVersion.IsValid() {
 		if zkVersion.LessThan(Version{3, 5, 0}) {
@@ -353,9 +379,59 @@ func TestMulti(t *testing.T) {
 			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
-			ops := []interface{}{
+
+			// Create and set data with check versions.
+			ops := []any{
 				&CreateRequest{Path: path, Data: []byte{1, 2, 3, 4}, Acl: WorldACL(PermAll)},
-				&SetDataRequest{Path: path, Data: []byte{1, 2, 3, 4}, Version: -1},
+				&CheckVersionRequest{Path: path, Version: 0}, // Should be at version 0
+				&SetDataRequest{Path: path, Data: []byte{1, 2, 3, 4}, Version: 0},
+				&CheckVersionRequest{Path: path, Version: 1}, // Should be at version 1
+			}
+			if res, err := c.Multi(ops...); err != nil {
+				t.Fatalf("Multi returned error: %+v", err)
+			} else if len(res) != 4 {
+				t.Fatalf("Expected 4 responses got %d", len(res))
+			} else {
+				t.Logf("%+v", res)
+			}
+
+			if data, stat, err := c.Get(path); err != nil {
+				t.Fatalf("Get returned error: %+v", err)
+			} else if stat == nil {
+				t.Fatal("Get returned nil stat")
+			} else if len(data) < 4 {
+				t.Fatal("Get returned wrong size data")
+			}
+
+			// Check version fails and prevents delete.
+			ops = []any{
+				&CheckVersionRequest{Path: path, Version: 10}, // Should be at version 1
+				&DeleteRequest{Path: path, Version: 1},
+			}
+			if res, err := c.Multi(ops...); err == nil {
+				t.Fatal("Multi returned no error, but error was expected")
+			} else if !strings.Contains(err.Error(), "version conflict") {
+				t.Fatalf("Multi returned unexpected error: %+v", err)
+			} else if len(res) != 2 {
+				t.Fatalf("Expected 2 responses got %d", len(res))
+			} else if res[0].Error != ErrBadVersion {
+				t.Fatalf("Expected ErrBadVersion got %+v", res[0].Error)
+			} else {
+				t.Logf("%+v", res)
+			}
+
+			if data, stat, err := c.Get(path); err != nil {
+				t.Fatalf("Get returned error: %+v", err)
+			} else if stat == nil {
+				t.Fatal("Get returned nil stat")
+			} else if len(data) < 4 {
+				t.Fatal("Get returned wrong size data")
+			}
+
+			// Successful delete and check version.
+			ops = []any{
+				&CheckVersionRequest{Path: path, Version: 1}, // Should be at version 1
+				&DeleteRequest{Path: path, Version: 1},
 			}
 			if res, err := c.Multi(ops...); err != nil {
 				t.Fatalf("Multi returned error: %+v", err)
@@ -364,12 +440,68 @@ func TestMulti(t *testing.T) {
 			} else {
 				t.Logf("%+v", res)
 			}
-			if data, stat, err := c.Get(path); err != nil {
+
+			if ok, stat, err := c.Exists(path); err != nil {
 				t.Fatalf("Get returned error: %+v", err)
 			} else if stat == nil {
-				t.Fatal("Get returned nil stat")
-			} else if len(data) < 4 {
-				t.Fatal("Get returned wrong size data")
+				t.Fatal("Exists returned nil stat")
+			} else if ok {
+				t.Fatal("Exists returned true; expected false")
+			}
+		})
+	})
+}
+
+func TestMultiRead(t *testing.T) {
+	t.Parallel()
+
+	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
+			paths := []string{
+				"/gozk-test-multiread",
+				"/gozk-test-multiread/a",
+				"/gozk-test-multiread/a/b",
+				"/gozk-test-multiread/a/c",
+				"/gozk-test-multiread/a/c/d",
+			}
+			for _, p := range paths {
+				if path, err := c.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+					t.Fatalf("Create returned error: %+v", err)
+				} else if path != p {
+					t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+				}
+			}
+
+			ops := []any{
+				&GetChildrenRequest{Path: paths[0]},
+				&GetChildrenRequest{Path: paths[1]},
+				&GetChildrenRequest{Path: paths[2]},
+				&GetDataRequest{Path: paths[3]},
+			}
+			if res, err := c.MultiRead(ops...); err != nil {
+				t.Fatalf("MultiRead returned error: %+v", err)
+			} else if len(res) != 4 {
+				t.Fatalf("Expected 4 responses got %d", len(res))
+			} else if res[0].Error != nil {
+				t.Fatalf("GetChildren returned error: %+v", res[0].Error)
+			} else if !slicesEqual(res[0].Children, []string{"a"}) {
+				t.Fatalf("GetChildren returned wrong children: %+v", res[0].Children)
+			} else if res[1].Error != nil {
+				t.Fatalf("GetChildren returned error: %+v", res[1].Error)
+			} else if !slicesEqual(res[1].Children, []string{"b", "c"}) {
+				t.Fatalf("GetChildren returned wrong children: %+v", res[1].Children)
+			} else if res[2].Error != nil {
+				t.Fatalf("GetChildren returned error: %+v", res[2].Error)
+			} else if len(res[2].Children) != 0 {
+				t.Fatalf("GetChildren returned wrong number of children: %d", len(res[2].Children))
+			} else if res[3].Error != nil {
+				t.Fatalf("GetData returned error: %+v", res[3].Error)
+			} else if res[3].Stat == nil {
+				t.Fatal("GetData returned nil stat")
+			} else if !slicesEqual(res[3].Data, []byte{1, 2, 3, 4}) {
+				t.Fatalf("GetData returned wrong data: %+v", res[3].Data)
+			} else {
+				t.Logf("%+v", res)
 			}
 		})
 	})
@@ -443,7 +575,7 @@ func TestMultiFailures(t *testing.T) {
 				t.Fatalf("Create returned error: %+v", err)
 			}
 
-			ops := []interface{}{
+			ops := []any{
 				&CreateRequest{Path: firstPath, Data: []byte{1, 2}, Acl: WorldACL(PermAll)},
 				&CreateRequest{Path: secondPath, Data: []byte{3, 4}, Acl: WorldACL(PermAll)},
 			}
@@ -1958,91 +2090,120 @@ func TestMaxBufferSize(t *testing.T) {
 	})
 }
 
-func TestCachedLeavesWalker(t *testing.T) {
-	t.Parallel()
-
+func TestBatchWalker(t *testing.T) {
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			paths := []string{
-				"/gozk-test-cachedleaveswalker",
-				"/gozk-test-cachedleaveswalker/a",
-				"/gozk-test-cachedleaveswalker/a/b",
-				"/gozk-test-cachedleaveswalker/a/c",
-				"/gozk-test-cachedleaveswalker/a/c/d",
-				"/gozk-test-ignoreme",
-				"/gozk-test-ignoreme/a",
-			}
-			for _, p := range paths {
-				if path, err := c.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-					t.Fatalf("Create returned error: %+v", err)
-				} else if path != p {
-					t.Fatalf("Create returned different path '%s' != '%s'", path, p)
+			startTime := time.Now()
+			paths := createTree(t, c, "/gozk-test-batchtreewalker", 3, 20)
+			t.Logf("Tree created in %d ms", time.Since(startTime).Milliseconds())
+
+			sort.Strings(paths) // Sort so we can compare the results later.
+
+			runTest := func(t *testing.T, batchSize int) {
+				walker := c.BatchWalker("/gozk-test-batchtreewalker", batchSize)
+
+				startTime := time.Now()
+				var visited []string
+				var numBatches = 0
+				err := walker.Walk(func(paths []string) error {
+					visited = append(visited, paths...)
+					numBatches++
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("Walk returned error: %+v", err)
+				}
+				t.Logf("Tree walked %d nodes over %d batches in %d ms",
+					len(paths), numBatches, time.Since(startTime).Milliseconds())
+
+				// Verify that we got all the expected paths.
+				sort.Strings(visited) // Order doesn't matter
+				if !reflect.DeepEqual(visited, paths) {
+					t.Fatalf("Walk returned the wrong patchs, exptected %+v, got %+v", paths, visited)
 				}
 			}
 
-			walker, err := NewCachedLeavesWalker(c, "/gozk-test-cachedleaveswalker")
-			if err != nil {
-				t.Fatalf("AddCachedLeavesWalker returned error: %+v", err)
-			}
-
-			var visited []string
-			err = walker.WalkLeaves(func(p string) error {
-				visited = append(visited, p)
-				return nil
+			t.Run("BatchSize=1", func(t *testing.T) {
+				runTest(t, 1)
 			})
-			if err != nil {
-				t.Fatalf("WalkLeaves returned error: %+v", err)
-			}
-			expected := []string{
-				"/gozk-test-cachedleaveswalker/a/b",
-				"/gozk-test-cachedleaveswalker/a/c/d",
-			}
-			sort.Strings(expected)
-			sort.Strings(visited) // Order doesn't matter
-			if !reflect.DeepEqual(visited, expected) {
-				t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
-			}
 
-			paths = []string{
-				"/gozk-test-cachedleaveswalker/b",
-				"/gozk-test-cachedleaveswalker/b/b",
-				"/gozk-test-cachedleaveswalker/b/c",
-				"/gozk-test-cachedleaveswalker/b/c/d",
-			}
-			for _, p := range paths {
-				if path, err := c.Create(p, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
-					t.Fatalf("Create returned error: %+v", err)
-				} else if path != p {
-					t.Fatalf("Create returned different path '%s' != '%s'", path, p)
-				}
-			}
-
-			if err := c.Delete("/gozk-test-cachedleaveswalker/a/b", -1); err != nil {
-				t.Fatalf("Delete returned error: %+v", err)
-			}
-
-			time.Sleep(time.Millisecond * 100)
-
-			visited = []string{}
-			err = walker.WalkLeaves(func(p string) error {
-				visited = append(visited, p)
-				return nil
+			t.Run("BatchSize=2", func(t *testing.T) {
+				runTest(t, 2)
 			})
-			if err != nil {
-				t.Fatalf("WalkLeaves returned error: %+v", err)
-			}
-			expected = []string{
-				"/gozk-test-cachedleaveswalker/a/c/d",
-				"/gozk-test-cachedleaveswalker/b/b",
-				"/gozk-test-cachedleaveswalker/b/c/d",
-			}
-			sort.Strings(expected)
-			sort.Strings(visited) // Order doesn't matter
-			if !reflect.DeepEqual(visited, expected) {
-				t.Fatalf("WalkLeaves returned the wrong leaves, exptected %+v, got %+v", expected, visited)
-			}
+
+			t.Run("BatchSize=4", func(t *testing.T) {
+				runTest(t, 4)
+			})
+
+			t.Run("BatchSize=8", func(t *testing.T) {
+				runTest(t, 8)
+			})
+
+			t.Run("BatchSize=16", func(t *testing.T) {
+				runTest(t, 16)
+			})
+
+			t.Run("BatchSize=32", func(t *testing.T) {
+				runTest(t, 32)
+			})
+
+			t.Run("BatchSize=64", func(t *testing.T) {
+				runTest(t, 64)
+			})
+
+			t.Run("BatchSize=128", func(t *testing.T) {
+				runTest(t, 512)
+			})
+
+			t.Run("BatchSize=256", func(t *testing.T) {
+				runTest(t, 2048)
+			})
 		})
 	})
+}
+
+func createTree(t *testing.T, c *Conn, root string, depth int, breadth int) []string {
+	var paths = []string{root}
+	paths = append(paths, generateTreePaths(root, depth, breadth)...)
+
+	createBatch := func(t *testing.T, c *Conn, paths []string) {
+		var ops = make([]any, len(paths))
+		for i, p := range paths {
+			ops[i] = &CreateRequest{Path: p, Data: []byte(p), Acl: WorldACL(PermAll)}
+		}
+		if _, err := c.Multi(ops...); err != nil {
+			t.Fatalf("Multi returned error: %+v", err)
+		}
+	}
+
+	var batch []string
+
+	for _, p := range paths {
+		batch = append(batch, p)
+		if len(batch) >= 1024 {
+			createBatch(t, c, batch)
+			batch = nil
+		}
+	}
+
+	if len(batch) > 0 {
+		createBatch(t, c, batch)
+	}
+
+	return paths
+}
+
+func generateTreePaths(prefix string, depth int, breadth int) []string {
+	var paths []string
+	for i := 0; i < breadth; i++ {
+		paths = append(paths, fmt.Sprintf("%s/%d", prefix, i))
+	}
+	if depth > 1 {
+		for _, p := range paths {
+			paths = append(paths, generateTreePaths(p, depth-1, breadth)...)
+		}
+	}
+	return paths
 }
 
 type testLogger struct {
@@ -2050,7 +2211,7 @@ type testLogger struct {
 	events []string
 }
 
-func (l *testLogger) Printf(msgFormat string, args ...interface{}) {
+func (l *testLogger) Printf(msgFormat string, args ...any) {
 	msg := fmt.Sprintf(msgFormat, args...)
 	fmt.Println(msg)
 	l.mu.Lock()

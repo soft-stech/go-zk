@@ -166,15 +166,3 @@ func Test_ringBuffer_ensureCapacity(t *testing.T) {
 		t.Fatalf("expected capacity 20, got %d", rb.cap())
 	}
 }
-
-func slicesEqual[T comparable](a, b []T) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}

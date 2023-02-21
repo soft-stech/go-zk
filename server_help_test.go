@@ -141,7 +141,8 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 		cluster.Config = cfg
 	}
 
-	if err := cluster.waitForStart(30, time.Second); err != nil {
+	// Wait for up to 1 minute (60 * 1 second) for the cluster to boot up.
+	if err := cluster.waitForStart(60, time.Second); err != nil {
 		return nil, err
 	}
 

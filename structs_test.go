@@ -21,22 +21,27 @@ func TestEncodeDecodePacket(t *testing.T) {
 
 func TestRequestStructForOp(t *testing.T) {
 	for op, name := range opNames {
-		if op != opNotify && op != opWatcherEvent {
+		switch op {
+		case opNotify, opPing, opWatcherEvent, opClose:
+			if s := requestStructForOp(op); s != nil {
+				t.Errorf("Expected no struct for op %s, but got one", name)
+			}
+		default:
 			if s := requestStructForOp(op); s == nil {
-				t.Errorf("No struct for op %s", name)
+				t.Errorf("Expected struct for op %s, but got none", name)
 			}
 		}
 	}
 }
 
-func encodeDecodeTest(t *testing.T, r interface{}) {
+func encodeDecodeTest(t *testing.T, r any) {
 	buf := make([]byte, 1024)
 	n, err := encodePacket(buf, r)
 	if err != nil {
 		t.Errorf("encodePacket returned non-nil error %+v\n", err)
 		return
 	}
-	t.Logf("%+v %x", r, buf[:n])
+	//t.Logf("%+v %x", r, buf[:n])
 	r2 := reflect.New(reflect.ValueOf(r).Elem().Type()).Interface()
 	n2, err := decodePacket(buf[:n], r2)
 	if err != nil {

@@ -18,7 +18,7 @@ var (
 
 type defaultLogger struct{}
 
-func (defaultLogger) Printf(format string, a ...interface{}) {
+func (defaultLogger) Printf(format string, a ...any) {
 	log.Printf(format, a...)
 }
 
@@ -138,11 +138,7 @@ type statResponse struct {
 	Stat Stat
 }
 
-//
-
 type CheckVersionRequest PathVersionRequest
-type closeRequest struct{}
-type closeResponse struct{}
 
 type connectRequest struct {
 	ProtocolVersion int32
@@ -178,7 +174,6 @@ type CreateTTLRequest struct {
 
 type createResponse pathResponse
 type DeleteRequest PathVersionRequest
-type deleteResponse struct{}
 
 //type errorResponse struct {
 //	Err int32
@@ -193,7 +188,7 @@ type getAclResponse struct { // nolint: revive, stylecheck
 	Stat Stat
 }
 
-type getChildrenRequest pathRequest
+type GetChildrenRequest pathWatchRequest
 
 type getChildrenResponse struct {
 	Children []string
@@ -206,26 +201,12 @@ type getChildren2Response struct {
 	Stat     Stat
 }
 
-type getDataRequest pathWatchRequest
+type GetDataRequest pathWatchRequest
 
 type getDataResponse struct {
 	Data []byte
 	Stat Stat
 }
-
-//type getMaxChildrenRequest pathRequest
-
-//type getMaxChildrenResponse struct {
-//	Max int32
-//}
-
-//type getSaslRequest struct {
-//	Token []byte
-//}
-
-type pingRequest struct{}
-
-//type pingResponse struct{}
 
 type setAclRequest struct { // nolint: revive, stylecheck
 	Path    string
@@ -240,8 +221,6 @@ type addWatchRequest struct {
 	Mode addWatchMode
 }
 
-type addWatchResponse struct{}
-
 type SetDataRequest struct {
 	Path    string
 	Data    []byte
@@ -250,28 +229,12 @@ type SetDataRequest struct {
 
 type setDataResponse statResponse
 
-//type setMaxChildren struct {
-//	Path string
-//	Max  int32
-//}
-
-//type setSaslRequest struct {
-//	Token string
-//}
-
-//type setSaslResponse struct {
-//	Token string
-//}
-
 type setWatchesRequest struct {
 	RelativeZxid int64
 	DataWatches  []string
 	ExistWatches []string
 	ChildWatches []string
 }
-
-// This is unused - remove it?
-// type setWatchesResponse struct{}
 
 type setWatches2Request struct {
 	RelativeZxid               int64
@@ -282,34 +245,29 @@ type setWatches2Request struct {
 	PersistentRecursiveWatches []string
 }
 
-type setWatches2Response struct{}
-
 type removeWatchesRequest struct {
 	Path string
 	Type removeWatchType
 }
 
-type removeWatchesResponse struct{}
-
 type syncRequest pathRequest
 type syncResponse pathResponse
 
 type setAuthRequest auth
-type setAuthResponse struct{}
 
 type multiRequestOp struct {
 	Header multiHeader
-	Op     interface{}
+	Op     any
 }
 type multiRequest struct {
 	Ops        []multiRequestOp
 	DoneHeader multiHeader
 }
+
 type multiResponseOp struct {
 	Header multiHeader
-	String string
-	Stat   *Stat
 	Err    ErrCode
+	Resp   any
 }
 type multiResponse struct {
 	Ops        []multiResponseOp
@@ -396,18 +354,25 @@ func (r *multiResponse) Decode(buf []byte) (int, error) {
 			break
 		}
 
-		res := multiResponseOp{Header: *header}
+		resOp := multiResponseOp{Header: *header}
 		var w reflect.Value
 		switch header.Type {
 		default:
 			return total, ErrAPIError
 		case opError:
-			w = reflect.ValueOf(&res.Err)
+			w = reflect.ValueOf(&resOp.Err)
 		case opCreate:
-			w = reflect.ValueOf(&res.String)
+			resOp.Resp = new(createResponse)
+			w = reflect.ValueOf(resOp.Resp)
 		case opSetData:
-			res.Stat = new(Stat)
-			w = reflect.ValueOf(res.Stat)
+			resOp.Resp = new(setDataResponse)
+			w = reflect.ValueOf(resOp.Resp)
+		case opGetData:
+			resOp.Resp = new(getDataResponse)
+			w = reflect.ValueOf(resOp.Resp)
+		case opGetChildren:
+			resOp.Resp = new(getChildrenResponse)
+			w = reflect.ValueOf(resOp.Resp)
 		case opCheck, opDelete:
 		}
 		if w.IsValid() {
@@ -417,10 +382,10 @@ func (r *multiResponse) Decode(buf []byte) (int, error) {
 			}
 			total += n
 		}
-		r.Ops = append(r.Ops, res)
-		if multiErr == nil && res.Err != errOk {
+		r.Ops = append(r.Ops, resOp)
+		if multiErr == nil && resOp.Err != errOk {
 			// Use the first error as the error returned from Multi().
-			multiErr = res.Err.toError()
+			multiErr = resOp.Err.toError()
 		}
 	}
 	return total, multiErr
@@ -440,7 +405,7 @@ type encoder interface {
 	Encode(buf []byte) (int, error)
 }
 
-func decodePacket(buf []byte, st interface{}) (n int, err error) {
+func decodePacket(buf []byte, st any) (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(runtime.Error); ok && strings.HasPrefix(e.Error(), "runtime error: slice bounds out of range") {
@@ -531,7 +496,7 @@ func decodePacketValue(buf []byte, v reflect.Value) (int, error) {
 	return n, nil
 }
 
-func encodePacket(buf []byte, st interface{}) (n int, err error) {
+func encodePacket(buf []byte, st any) (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(runtime.Error); ok && strings.HasPrefix(e.Error(), "runtime error: slice bounds out of range") {
@@ -621,10 +586,8 @@ func encodePacketValue(buf []byte, v reflect.Value) (int, error) {
 	return n, nil
 }
 
-func requestStructForOp(op int32) interface{} {
+func requestStructForOp(op int32) any {
 	switch op {
-	case opClose:
-		return &closeRequest{}
 	case opCreate:
 		return &CreateRequest{}
 	case opCreateContainer:
@@ -638,13 +601,11 @@ func requestStructForOp(op int32) interface{} {
 	case opGetACL:
 		return &getAclRequest{}
 	case opGetChildren:
-		return &getChildrenRequest{}
+		return &GetChildrenRequest{}
 	case opGetChildren2:
 		return &getChildren2Request{}
 	case opGetData:
-		return &getDataRequest{}
-	case opPing:
-		return &pingRequest{}
+		return &GetDataRequest{}
 	case opSetACL:
 		return &setAclRequest{}
 	case opSetData:
@@ -663,7 +624,7 @@ func requestStructForOp(op int32) interface{} {
 		return &setAuthRequest{}
 	case opCheck:
 		return &CheckVersionRequest{}
-	case opMulti:
+	case opMulti, opMultiRead:
 		return &multiRequest{}
 	case opReconfig:
 		return &reconfigRequest{}

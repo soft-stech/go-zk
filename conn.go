@@ -703,7 +703,7 @@ func (c *Conn) restoreWatches() {
 		// aren't failure modes where a blocking write to the channel of requests
 		// could hang indefinitely and cause this goroutine to leak...
 		for _, req = range reqs {
-			_, err := c.request(context.Background(), opSetWatches2, req, nil, nil)
+			_, _, err := c.request(context.Background(), opSetWatches2, req, nil, nil)
 			if err != nil {
 				c.logger.Printf("failed to set previous watches: %v", err)
 				break
@@ -1023,20 +1023,24 @@ func (c *Conn) queueRequest(ctx context.Context, opcode int32, req any, res any,
 	return rq.recvChan
 }
 
-func (c *Conn) request(ctx context.Context, opcode int32, req any, res any, recvFunc func(*request, *responseHeader, error)) (int64, error) {
+func (c *Conn) request(
+	ctx context.Context,
+	opcode int32,
+	req any,
+	res any,
+	recvFunc func(*request, *responseHeader, error),
+) (xid int64, aborted bool, err error) {
+	// NOTE: queueRequest() can be racy due to access to `res` fields concurrently w/ the async response processor.
+	// Callers must not read from `res` if this function returns aborted=true. Doing so will trip race detector.
 	recv := c.queueRequest(ctx, opcode, req, res, recvFunc)
+
 	select {
 	case r := <-recv:
-		return r.zxid, r.err
-	case <-ctx.Done():
-		return -1, ctx.Err()
-	case <-c.shouldQuit:
-		// queueRequest() can be racy, double-check for the race here and avoid
-		// a potential data-race. otherwise the client of this func may try to
-		// access `res` fields concurrently w/ the async response processor.
-		// NOTE: callers of this func should check for (at least) ErrConnectionClosed
-		// and avoid accessing fields of the response object if such error is present.
-		return -1, ErrConnectionClosed
+		return r.zxid, false, r.err
+	case <-ctx.Done(): // Aborts active request.
+		return -1, true, ctx.Err()
+	case <-c.shouldQuit: // Aborts active request.
+		return -1, true, ErrConnectionClosed
 	}
 }
 
@@ -1047,8 +1051,7 @@ func (c *Conn) AddAuth(scheme string, auth []byte) error {
 
 // AddAuthCtx adds an authentication config to the connection.
 func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error {
-	_, err := c.request(ctx, opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, nil, nil)
-
+	_, _, err := c.request(ctx, opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1096,7 +1099,7 @@ func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, opt
 		opt(&wopts)
 	}
 
-	_, err := c.request(ctx, opAddWatch, &addWatchRequest{Path: path, Mode: mode}, nil, func(req *request, res *responseHeader, err error) {
+	_, _, err := c.request(ctx, opAddWatch, &addWatchRequest{Path: path, Mode: mode}, nil, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, kind, wopts)
 		}
@@ -1104,6 +1107,7 @@ func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, opt
 	if err != nil {
 		return nil, err
 	}
+
 	return ech, err
 }
 
@@ -1136,7 +1140,7 @@ func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 		default:
 			req.Type = removeWatchTypePersistent
 		}
-		_, err := c.request(ctx, opRemoveWatches, req, nil, nil)
+		_, _, err := c.request(ctx, opRemoveWatches, req, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -1157,10 +1161,11 @@ func (c *Conn) ChildrenCtx(ctx context.Context, path string) ([]string, *Stat, e
 	}
 
 	res := &getChildren2Response{}
-	_, err := c.request(ctx, opGetChildren2, &getChildren2Request{Path: path, Watch: false}, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, nil, err
+	_, aborted, err := c.request(ctx, opGetChildren2, &getChildren2Request{Path: path, Watch: false}, res, nil)
+	if err != nil && aborted {
+		return nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Children, &res.Stat, err
 }
 
@@ -1177,14 +1182,15 @@ func (c *Conn) ChildrenWCtx(ctx context.Context, path string) ([]string, *Stat, 
 
 	var ech <-chan Event
 	res := &getChildren2Response{}
-	_, err := c.request(ctx, opGetChildren2, &getChildren2Request{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
+	_, aborted, err := c.request(ctx, opGetChildren2, &getChildren2Request{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watcherKindChildren, watcherOptions{})
 		}
 	})
-	if err != nil {
-		return nil, nil, nil, err
+	if err != nil && aborted {
+		return nil, nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Children, &res.Stat, ech, err
 }
 
@@ -1200,10 +1206,11 @@ func (c *Conn) GetCtx(ctx context.Context, path string) ([]byte, *Stat, error) {
 	}
 
 	res := &getDataResponse{}
-	_, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: false}, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, nil, err
+	_, aborted, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: false}, res, nil)
+	if err != nil && aborted {
+		return nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Data, &res.Stat, err
 }
 
@@ -1220,14 +1227,15 @@ func (c *Conn) GetWCtx(ctx context.Context, path string) ([]byte, *Stat, <-chan 
 
 	var ech <-chan Event
 	res := &getDataResponse{}
-	_, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
+	_, aborted, err := c.request(ctx, opGetData, &GetDataRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
 		}
 	})
-	if err != nil {
-		return nil, nil, nil, err
+	if err != nil && aborted {
+		return nil, nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Data, &res.Stat, ech, err
 }
 
@@ -1243,10 +1251,11 @@ func (c *Conn) SetCtx(ctx context.Context, path string, data []byte, version int
 	}
 
 	res := &setDataResponse{}
-	_, err := c.request(ctx, opSetData, &SetDataRequest{path, data, version}, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, err
+	_, aborted, err := c.request(ctx, opSetData, &SetDataRequest{path, data, version}, res, nil)
+	if err != nil && aborted {
+		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return &res.Stat, err
 }
 
@@ -1268,10 +1277,11 @@ func (c *Conn) CreateCtx(ctx context.Context, path string, data []byte, flags in
 	}
 
 	res := &createResponse{}
-	_, err := c.request(ctx, opCreate, &CreateRequest{path, data, acl, flags}, res, nil)
-	if err == ErrConnectionClosed {
-		return "", err
+	_, aborted, err := c.request(ctx, opCreate, &CreateRequest{path, data, acl, flags}, res, nil)
+	if err != nil && aborted {
+		return "", err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Path, err
 }
 
@@ -1290,7 +1300,11 @@ func (c *Conn) CreateContainerCtx(ctx context.Context, path string, data []byte,
 	}
 
 	res := &createResponse{}
-	_, err := c.request(ctx, opCreateContainer, &CreateContainerRequest{path, data, acl, flags}, res, nil)
+	_, aborted, err := c.request(ctx, opCreateContainer, &CreateContainerRequest{path, data, acl, flags}, res, nil)
+	if err != nil && aborted {
+		return "", err // Request aborted, so we cannot read from `res` without risking a data race.
+	}
+
 	return res.Path, err
 }
 
@@ -1309,7 +1323,11 @@ func (c *Conn) CreateTTLCtx(ctx context.Context, path string, data []byte, flags
 	}
 
 	res := &createResponse{}
-	_, err := c.request(ctx, opCreateTTL, &CreateTTLRequest{path, data, acl, flags, ttl.Milliseconds()}, res, nil)
+	_, aborted, err := c.request(ctx, opCreateTTL, &CreateTTLRequest{path, data, acl, flags, ttl.Milliseconds()}, res, nil)
+	if err != nil && aborted {
+		return "", err // Request aborted, so we cannot read from `res` without risking a data race.
+	}
+
 	return res.Path, err
 }
 
@@ -1381,7 +1399,7 @@ func (c *Conn) DeleteCtx(ctx context.Context, path string, version int32) error 
 		return err
 	}
 
-	_, err := c.request(ctx, opDelete, &DeleteRequest{path, version}, nil, nil)
+	_, _, err := c.request(ctx, opDelete, &DeleteRequest{path, version}, nil, nil)
 	return err
 }
 
@@ -1397,15 +1415,17 @@ func (c *Conn) ExistsCtx(ctx context.Context, path string) (bool, *Stat, error) 
 	}
 
 	res := &existsResponse{}
-	_, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: false}, res, nil)
-	if err == ErrConnectionClosed {
-		return false, nil, err
+	_, aborted, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: false}, res, nil)
+	if err != nil && aborted {
+		return false, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	exists := true
 	if err == ErrNoNode {
 		exists = false
 		err = nil
 	}
+
 	return exists, &res.Stat, err
 }
 
@@ -1422,21 +1442,23 @@ func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan
 
 	var ech <-chan Event
 	res := &existsResponse{}
-	_, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
+	_, aborted, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
 		} else if err == ErrNoNode {
 			ech = c.addWatcher(path, watcherKindExist, watcherOptions{})
 		}
 	})
+	if err != nil && aborted {
+		return false, nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
+	}
+
 	exists := true
 	if err == ErrNoNode {
 		exists = false
 		err = nil
 	}
-	if err != nil {
-		return false, nil, nil, err
-	}
+
 	return exists, &res.Stat, ech, err
 }
 
@@ -1452,10 +1474,11 @@ func (c *Conn) GetACLCtx(ctx context.Context, path string) ([]ACL, *Stat, error)
 	}
 
 	res := &getAclResponse{}
-	_, err := c.request(ctx, opGetACL, &getAclRequest{Path: path}, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, nil, err
+	_, aborted, err := c.request(ctx, opGetACL, &getAclRequest{Path: path}, res, nil)
+	if err != nil && aborted {
+		return nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Acl, &res.Stat, err
 }
 
@@ -1471,10 +1494,11 @@ func (c *Conn) SetACLCtx(ctx context.Context, path string, acl []ACL, version in
 	}
 
 	res := &setAclResponse{}
-	_, err := c.request(ctx, opSetACL, &setAclRequest{Path: path, Acl: acl, Version: version}, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, err
+	_, aborted, err := c.request(ctx, opSetACL, &setAclRequest{Path: path, Acl: acl, Version: version}, res, nil)
+	if err != nil && aborted {
+		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return &res.Stat, err
 }
 
@@ -1494,10 +1518,11 @@ func (c *Conn) SyncCtx(ctx context.Context, path string) (string, error) {
 	}
 
 	res := &syncResponse{}
-	_, err := c.request(ctx, opSync, &syncRequest{Path: path}, res, nil)
-	if err == ErrConnectionClosed {
-		return "", err
+	_, aborted, err := c.request(ctx, opSync, &syncRequest{Path: path}, res, nil)
+	if err != nil && aborted {
+		return "", err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
+
 	return res.Path, err
 }
 
@@ -1544,9 +1569,9 @@ func (c *Conn) MultiCtx(ctx context.Context, ops ...any) ([]MultiResponse, error
 	}
 
 	res := &multiResponse{}
-	_, err := c.request(ctx, opMulti, req, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, err
+	_, aborted, err := c.request(ctx, opMulti, req, res, nil)
+	if err != nil && aborted {
+		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
 
 	mr := make([]MultiResponse, len(res.Ops))
@@ -1566,6 +1591,7 @@ func (c *Conn) MultiCtx(ctx context.Context, ops ...any) ([]MultiResponse, error
 			}
 		}
 	}
+
 	return mr, err
 }
 
@@ -1598,9 +1624,9 @@ func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, e
 	}
 
 	res := &multiResponse{}
-	_, err := c.request(ctx, opMultiRead, req, res, nil)
-	if err == ErrConnectionClosed {
-		return nil, err
+	_, aborted, err := c.request(ctx, opMultiRead, req, res, nil)
+	if err != nil && aborted {
+		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
 
 	mr := make([]MultiResponse, len(res.Ops))
@@ -1668,18 +1694,22 @@ func (c *Conn) Reconfig(members []string, version int64) (*Stat, error) {
 //
 // Returns the new configuration znode stat.
 func (c *Conn) ReconfigCtx(ctx context.Context, members []string, version int64) (*Stat, error) {
-	request := &reconfigRequest{
+	req := &reconfigRequest{
 		NewMembers:  []byte(strings.Join(members, ",")),
 		CurConfigId: version,
 	}
 
-	return c.internalReconfig(ctx, request)
+	return c.internalReconfig(ctx, req)
 }
 
-func (c *Conn) internalReconfig(ctx context.Context, request *reconfigRequest) (*Stat, error) {
-	response := &reconfigReponse{}
-	_, err := c.request(ctx, opReconfig, request, response, nil)
-	return &response.Stat, err
+func (c *Conn) internalReconfig(ctx context.Context, req *reconfigRequest) (*Stat, error) {
+	resp := &reconfigReponse{}
+	_, aborted, err := c.request(ctx, opReconfig, req, resp, nil)
+	if err != nil && aborted {
+		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
+	}
+
+	return &resp.Stat, err
 }
 
 // Server returns the current or last-connected server name.

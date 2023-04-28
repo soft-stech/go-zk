@@ -32,11 +32,20 @@ func WithWatcherReservoirLimit(reservoirLimit int) WatcherOption {
 	}
 }
 
+// WithStallCallback returns a WatcherOption that configures a callback function for when we hit the reservoir limit.
+func WithStallCallback(stallCallback func()) WatcherOption {
+	return func(opts *watcherOptions) {
+		opts.stallCallback = stallCallback
+	}
+}
+
 type watcherOptions struct {
 	// If true, the watcher will be invalidated if the connection is lost.
 	invalidateOnDisconnect bool
 	// The pump reservoir limit for persistent watchers. Defaults to defaultReservoirLimit.
 	reservoirLimit int
+	// Called when the pump reservoir limit is hit and we stop processing Events
+	stallCallback func()
 }
 
 type watcherKey struct {
@@ -101,14 +110,14 @@ func (w *fireOnceWatcher) close() {
 	})
 }
 
-func newPersistentWatcher(stallCallback func(), opts watcherOptions) *persistentWatcher {
+func newPersistentWatcher(opts watcherOptions) *persistentWatcher {
 	if opts.reservoirLimit == 0 {
 		opts.reservoirLimit = defaultReservoirLimit
 	}
 
 	return &persistentWatcher{
 		opts: opts,
-		pump: newPump[Event](uint32(opts.reservoirLimit), stallCallback),
+		pump: newPump[Event](uint32(opts.reservoirLimit), opts.stallCallback),
 	}
 }
 

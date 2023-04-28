@@ -6,12 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	defaultBatchSize = 256
 )
+
+// ErrPersistentWatcherStalled is passed to OnSyncError hook whenever the pump reservoir limit is hit.
+var ErrPersistentWatcherStalled = fmt.Errorf("persistent watcher has stalled")
 
 func NewTreeCache(conn *Conn, path string, options ...TreeCacheOption) *TreeCache {
 	tc := &TreeCache{
@@ -262,11 +266,16 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 }
 
 func (tc *TreeCache) doSync(ctx context.Context) error {
+	stalled := &atomic.Value{}
+	stalled.Store(false)
 	// Start a recursive watch, so we do not miss any changes.
 	// We'll catch up with the changes after the initial sync.
 	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true,
 		WithWatcherInvalidateOnDisconnect(),
-		WithWatcherReservoirLimit(tc.reservoirLimit))
+		WithWatcherReservoirLimit(tc.reservoirLimit),
+		WithStallCallback(func() {
+			stalled.Store(true)
+		}))
 	if err != nil {
 		return err
 	}
@@ -342,6 +351,9 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 		select {
 		case e, ok := <-watchCh:
 			if !ok {
+				if stalled.Load().(bool) {
+					return ErrPersistentWatcherStalled
+				}
 				return fmt.Errorf("watch channel closed unexpectedly")
 			}
 			relPath := e.Path[len(tc.rootPath):]

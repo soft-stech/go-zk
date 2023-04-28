@@ -927,12 +927,19 @@ func (c *Conn) addWatcher(path string, kind watcherKind, opts watcherOptions) <-
 	key := watcherKey{path, kind}
 	var w watcher
 
+	stallCallback := opts.stallCallback
+	opts.stallCallback = func() {
+		// Report watcher stalls.
+		c.sendEvent(Event{Type: EventWatcherStalled, Path: path, State: c.State()})
+		c.logger.Printf("persistent watcher has stalled! {kind:%s, path:%s}", kind, path)
+
+		if stallCallback != nil { // Call the supplied callback
+			stallCallback()
+		}
+	}
+
 	if kind.isPersistent() {
-		w = newPersistentWatcher(func() {
-			// Report watcher stalls.
-			c.sendEvent(Event{Type: EventWatcherStalled, Path: path, State: c.State()})
-			c.logger.Printf("persistent watcher has stalled! {kind:%s, path:%s}", kind, path)
-		}, opts)
+		w = newPersistentWatcher(opts)
 	} else {
 		w = newFireOnceWatcher(opts)
 	}

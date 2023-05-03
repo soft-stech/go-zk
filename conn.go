@@ -1128,10 +1128,14 @@ func (c *Conn) RemoveWatch(ech <-chan Event) error {
 // Note: This method works for any type of watch, not just persistent ones.
 func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 	c.watchersLock.Lock()
-	defer c.watchersLock.Unlock()
 
 	// Remove the watcher from the client, first.
 	ok, key, remaining := c.removeWatcher(ech)
+
+	// Don't keep the lock during the request,
+	// may end up in a dead lock if another events is received before the request answer.
+	c.watchersLock.Unlock()
+
 	if !ok {
 		return ErrNoWatcher
 	}

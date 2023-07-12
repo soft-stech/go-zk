@@ -431,7 +431,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 				}
 			case EventNodeDeleted:
 				if tc.listener != nil {
-					data, stat, err := tc.Get(e.Path)
+					data, stat, err := tc.Get(relPath)
 					if err != nil {
 						return err
 					}

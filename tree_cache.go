@@ -112,7 +112,7 @@ type TreeCacheListener interface {
 
 	// OnNodeDeleting is called when a node is about to be deleted from the cache.
 	// This is your last chance to get the data for the node before it is deleted.
-	OnNodeDeleting(path string)
+	OnNodeDeleting(path string, data []byte, stat *Stat)
 
 	// OnNodeDeleted is called when a node is deleted after last full sync.
 	OnNodeDeleted(path string)
@@ -129,7 +129,7 @@ type TreeCacheListenerFuncs struct {
 	OnSyncErrorFunc       func(err error)
 	OnTreeSyncedFunc      func(elapsed time.Duration)
 	OnNodeCreatedFunc     func(path string, data []byte, stat *Stat)
-	OnNodeDeletingFunc    func(path string)
+	OnNodeDeletingFunc    func(path string, data []byte, stat *Stat)
 	OnNodeDeletedFunc     func(path string)
 	OnNodeDataChangedFunc func(path string, data []byte, stat *Stat)
 }
@@ -164,9 +164,9 @@ func (l *TreeCacheListenerFuncs) OnNodeCreated(path string, data []byte, stat *S
 	}
 }
 
-func (l *TreeCacheListenerFuncs) OnNodeDeleting(path string) {
+func (l *TreeCacheListenerFuncs) OnNodeDeleting(path string, data []byte, stat *Stat) {
 	if l.OnNodeDeletingFunc != nil {
-		l.OnNodeDeletingFunc(path)
+		l.OnNodeDeletingFunc(path, data, stat)
 	}
 }
 
@@ -431,7 +431,11 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 				}
 			case EventNodeDeleted:
 				if tc.listener != nil {
-					tc.listener.OnNodeDeleting(relPath)
+					data, stat, err := tc.Get(e.Path)
+					if err != nil {
+						return err
+					}
+					tc.listener.OnNodeDeleting(relPath, data, stat)
 				}
 				if relPath != "/" {
 					// Update stat of parent to reflect new child count.

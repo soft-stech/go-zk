@@ -430,13 +430,6 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					} // else, we'll get an EventNodeDeleted later.
 				}
 			case EventNodeDeleted:
-				if tc.listener != nil {
-					data, stat, err := tc.Get(relPath)
-					if err != nil {
-						return err
-					}
-					tc.listener.OnNodeDeleting(relPath, data, stat)
-				}
 				if relPath != "/" {
 					// Update stat of parent to reflect new child count.
 					found, stat, err := tc.conn.ExistsCtx(ctx, filepath.Dir(e.Path))
@@ -446,6 +439,13 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					if found {
 						tc.updateStat(filepath.Dir(relPath), stat)
 					} // else, we'll get an EventNodeDeleted later.
+				}
+				if tc.includeData && tc.listener != nil {
+					data, stat, err := tc.Get(relPath)
+					if err != nil {
+						return err
+					}
+					tc.listener.OnNodeDeleting(relPath, data, stat)
 				}
 				tc.delete(relPath)
 				if tc.listener != nil {

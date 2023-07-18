@@ -112,6 +112,7 @@ type TreeCacheListener interface {
 
 	// OnNodeDeleting is called when a node is about to be deleted from the cache.
 	// This is your last chance to get the data for the node before it is deleted.
+	// This only works if the cache is configured to include data WithTreeCacheIncludeData.
 	OnNodeDeleting(path string, data []byte, stat *Stat)
 
 	// OnNodeDeleted is called when a node is deleted after last full sync.

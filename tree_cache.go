@@ -110,6 +110,11 @@ type TreeCacheListener interface {
 	// OnNodeCreated is called when a node is created after last full sync.
 	OnNodeCreated(path string, data []byte, stat *Stat)
 
+	// OnNodeDeleting is called when a node is about to be deleted from the cache.
+	// This is your last chance to get the data for the node before it is deleted.
+	// This only works if the cache is configured to include data WithTreeCacheIncludeData.
+	OnNodeDeleting(path string, data []byte, stat *Stat)
+
 	// OnNodeDeleted is called when a node is deleted after last full sync.
 	OnNodeDeleted(path string)
 
@@ -125,6 +130,7 @@ type TreeCacheListenerFuncs struct {
 	OnSyncErrorFunc       func(err error)
 	OnTreeSyncedFunc      func(elapsed time.Duration)
 	OnNodeCreatedFunc     func(path string, data []byte, stat *Stat)
+	OnNodeDeletingFunc    func(path string, data []byte, stat *Stat)
 	OnNodeDeletedFunc     func(path string)
 	OnNodeDataChangedFunc func(path string, data []byte, stat *Stat)
 }
@@ -156,6 +162,12 @@ func (l *TreeCacheListenerFuncs) OnTreeSynced(elapsed time.Duration) {
 func (l *TreeCacheListenerFuncs) OnNodeCreated(path string, data []byte, stat *Stat) {
 	if l.OnNodeCreatedFunc != nil {
 		l.OnNodeCreatedFunc(path, data, stat)
+	}
+}
+
+func (l *TreeCacheListenerFuncs) OnNodeDeleting(path string, data []byte, stat *Stat) {
+	if l.OnNodeDeletingFunc != nil {
+		l.OnNodeDeletingFunc(path, data, stat)
 	}
 }
 
@@ -428,6 +440,13 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					if found {
 						tc.updateStat(filepath.Dir(relPath), stat)
 					} // else, we'll get an EventNodeDeleted later.
+				}
+				if tc.includeData && tc.listener != nil {
+					data, stat, err := tc.Get(relPath)
+					if err != nil {
+						return err
+					}
+					tc.listener.OnNodeDeleting(relPath, data, stat)
 				}
 				tc.delete(relPath)
 				if tc.listener != nil {

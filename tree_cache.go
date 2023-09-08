@@ -620,7 +620,7 @@ func (tc *TreeCache) toInternalPath(externalPath string) (string, error) {
 	if tc.absolutePaths {
 		// We expect externalPath to be prefixed by rootPath.
 		if !strings.HasPrefix(externalPath, tc.rootPath) {
-			return "", fmt.Errorf("path was outside of cache scope: %s", tc.rootPath)
+			return "", fmt.Errorf("path %q was outside of cache scope: %q", externalPath, tc.rootPath)
 		}
 		// Ex: rootPath="/foo", externalPath="/foo/bar" => internalPath="/bar"
 		return externalPath[len(tc.rootPath):], nil

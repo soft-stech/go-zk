@@ -1,4 +1,4 @@
-Native Go Zookeeper Client Library
+# Native Go Zookeeper Client Library
 ===================================
 
 /!\ This is a fork of https://github.com/go-zookeeper/zk / https://github.com/samuel/go-zookeeper /!\

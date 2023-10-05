@@ -613,3 +613,171 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 		})
 	})
 }
+
+func TestTreeCache_WatchesNodeDeleting(t *testing.T) {
+	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
+			_, err := c.Create("/test-tree-cache", nil, 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache", err)
+			}
+			_, err = c.Create("/test-tree-cache/child1", []byte("foo"), 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child1", err)
+			}
+			_, err = c.Create("/test-tree-cache/child2", []byte("bar"), 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child2", err)
+			}
+
+			listener := NewTreeCacheListenerMock()
+			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true), WithTreeCacheListener(listener))
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			syncErrCh := make(chan error, 1)
+
+			// Start syncing cache in the background.
+			go func() {
+				defer close(syncErrCh)
+				syncErrCh <- cache.Sync(ctx)
+			}()
+
+			// Wait for the first full sync to complete.
+			err = cache.WaitForInitialSync(ctx)
+			if err != nil {
+				t.Fatalf("initial cache sync failed: %v", err)
+			}
+
+			_ = c.Delete("/test-tree-cache/child1", -1)
+			time.Sleep(time.Millisecond * 100)
+
+			// Check that the listener was called.
+			if listener.OnNodeDeletingCalled() != 1 {
+				t.Fatalf("expected onNodeDeletingCalled to be called once, got %d", listener.OnNodeDeletingCalled())
+			}
+
+			// Check that the listener was called with the correct path.
+			data, ok := listener.NodesDeleting()["/child1"]
+			if !ok {
+				t.Fatalf("expected onNodeDeletingCalled to be called with path /child1")
+			}
+
+			// Check that the listener was called with the correct data.
+			if string(data) != "foo" {
+				t.Fatalf("expected onNodeDeletingCalled to be called with data foo, got %s", string(data))
+			}
+
+			// Delete the path from cache before deleting from ZK to simulate non-existent node.
+			cache.delete("/child2")
+
+			_ = c.Delete("/test-tree-cache/child2", -1)
+			time.Sleep(time.Millisecond * 100)
+
+			// Check that the listener was called.
+			if listener.OnNodeDeletingCalled() != 2 {
+				t.Fatalf("expected onNodeDeletingCalled to be called twice, got %d", listener.OnNodeDeletingCalled())
+			}
+
+			// Check that the listener was called with the correct path.
+			data, ok = listener.NodesDeleting()["/child2"]
+			if !ok {
+				t.Fatalf("expected onNodeDeletingCalled to be called with path /child2")
+			}
+
+			// Check that the listener was called with nil
+			if data != nil {
+				t.Fatalf("expected onNodeDeletingCalled to be called with non nil data, got %s", string(data))
+			}
+
+			cancel()
+			if err := <-syncErrCh; err != context.Canceled {
+				t.Fatalf("expected context.Canceled, got %v", err)
+			}
+		})
+	})
+}
+
+func TestTreeCache_WatchesNodeDeletingAbsolute(t *testing.T) {
+	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
+		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
+			_, err := c.Create("/test-tree-cache", nil, 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache", err)
+			}
+			_, err = c.Create("/test-tree-cache/child1", []byte("foo"), 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child1", err)
+			}
+			_, err = c.Create("/test-tree-cache/child2", []byte("bar"), 0, WorldACL(PermAll))
+			if err != nil {
+				t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child2", err)
+			}
+
+			listener := NewTreeCacheListenerMock()
+			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true), WithTreeCacheListener(listener), WithTreeCacheAbsolutePaths(true))
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			syncErrCh := make(chan error, 1)
+
+			// Start syncing cache in the background.
+			go func() {
+				defer close(syncErrCh)
+				syncErrCh <- cache.Sync(ctx)
+			}()
+
+			// Wait for the first full sync to complete.
+			err = cache.WaitForInitialSync(ctx)
+			if err != nil {
+				t.Fatalf("initial cache sync failed: %v", err)
+			}
+
+			_ = c.Delete("/test-tree-cache/child1", -1)
+			time.Sleep(time.Millisecond * 100)
+
+			// Check that the listener was called.
+			if listener.OnNodeDeletingCalled() != 1 {
+				t.Fatalf("expected onNodeDeletingCalled to be called once, got %d", listener.OnNodeDeletingCalled())
+			}
+
+			// Check that the listener was called with the correct path.
+			data, ok := listener.NodesDeleting()["/child1"]
+			if !ok {
+				t.Fatalf("expected nodesDeleting to include path /child1")
+			}
+
+			// Check that the listener was called with the correct data.
+			if string(data) != "foo" {
+				t.Fatalf("expected nodesDeleting to include data foo for path child1, got %s", string(data))
+			}
+
+			// Delete the path from cache before deleting from ZK to simulate non-existent node.
+			cache.delete("/child2")
+
+			_ = c.Delete("/test-tree-cache/child2", -1)
+			time.Sleep(time.Millisecond * 100)
+
+			// Check that the listener was called.
+			if listener.OnNodeDeletingCalled() != 2 {
+				t.Fatalf("expected onNodeDeletingCalled to be called twice, got %d", listener.OnNodeDeletingCalled())
+			}
+
+			// Check that the listener was called with the correct path.
+			data, ok = listener.NodesDeleting()["/child2"]
+			if !ok {
+				t.Fatalf("expected nodesDeleting to include path /child2")
+			}
+
+			// Check that the listener was called with nil
+			if data != nil {
+				t.Fatalf("expected nodesDeleting to include nil data for path /child2, got %s", string(data))
+			}
+
+			cancel()
+			if err := <-syncErrCh; err != context.Canceled {
+				t.Fatalf("expected context.Canceled, got %v", err)
+			}
+		})
+	})
+}

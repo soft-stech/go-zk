@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,8 @@ type TreeCacheListener interface {
 	// OnNodeDeleting is called when a node is about to be deleted from the cache.
 	// This is your last chance to get the data for the node before it is deleted.
 	// This only works if the cache is configured to include data WithTreeCacheIncludeData.
+	// data and stat can be nil if the node was not found in the cache,
+	// so, nil handling should be done in the listener
 	OnNodeDeleting(path string, data []byte, stat *Stat)
 
 	// OnNodeDeleted is called when a node is deleted after last full sync.
@@ -442,8 +445,14 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					} // else, we'll get an EventNodeDeleted later.
 				}
 				if tc.includeData && tc.listener != nil {
-					data, stat, err := tc.Get(e.Path)
-					if err != nil {
+					dataPath := relPath
+					if tc.absolutePaths {
+						dataPath = e.Path
+					}
+					// we ignore the ErrNoNode here because the node may have not been created in the cache yet
+					// but we received the delete event, so, nil handling should be done in the listener
+					data, stat, err := tc.Get(dataPath)
+					if err != nil && !errors.Is(err, ErrNoNode) {
 						return err
 					}
 					tc.listener.OnNodeDeleting(relPath, data, stat)

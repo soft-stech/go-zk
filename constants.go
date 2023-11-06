@@ -9,6 +9,8 @@ const (
 	protocolVersion = 0
 	// DefaultPort is the default port listened by server.
 	DefaultPort = 2181
+
+	ConfigNode = "/zookeeper/config"
 )
 
 const (

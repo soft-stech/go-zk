@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -263,7 +264,7 @@ func TestIncrementalReconfig(t *testing.T) {
 			err = waitForSession(waitCtx, c, ech)
 			requireNoError(t, err, "failed to wail for session")
 
-			_, _, err = c.Get("/zookeeper/config")
+			_, _, err = c.Get(ConfigNode)
 			if err != nil {
 				t.Fatalf("get config returned error: %+v", err)
 			}
@@ -273,7 +274,7 @@ func TestIncrementalReconfig(t *testing.T) {
 			// reflect.DeepEqual(bytes.Split(data, []byte("\n")), []byte("version=100000000"))
 
 			// remove node 3.
-			_, err = c.IncrementalReconfig(nil, []string{"3"}, -1)
+			_, _, err = c.IncrementalReconfig(nil, []string{"3"}, -1)
 			if err != nil && err == ErrConnectionClosed {
 				t.Log("conneciton closed is fine since the cluster re-elects and we dont reconnect")
 			} else {
@@ -282,7 +283,7 @@ func TestIncrementalReconfig(t *testing.T) {
 
 			// add node a new 4th node
 			server := fmt.Sprintf("server.%d=%s:%d:%d;%d", testSrvConfig.ID, testSrvConfig.Host, testSrvConfig.PeerPort, testSrvConfig.LeaderElectionPort, cfg.ClientPort)
-			_, err = c.IncrementalReconfig([]string{server}, nil, -1)
+			_, _, err = c.IncrementalReconfig([]string{server}, nil, -1)
 			if err != nil && err == ErrConnectionClosed {
 				t.Log("conneciton closed is fine since the cluster re-elects and we dont reconnect")
 			} else {
@@ -314,7 +315,7 @@ func TestReconfig(t *testing.T) {
 			err = waitForSession(waitCtx, c, ech)
 			requireNoError(t, err, "failed to wail for session")
 
-			_, _, err = c.Get("/zookeeper/config")
+			_, _, err = c.Get(ConfigNode)
 			if err != nil {
 				t.Fatalf("get config returned error: %+v", err)
 			}
@@ -325,17 +326,31 @@ func TestReconfig(t *testing.T) {
 				s = append(s, fmt.Sprintf("server.%d=%s:%d:%d;%d\n", host.ID, host.Host, host.PeerPort, host.LeaderElectionPort, tc.Config.ClientPort))
 			}
 
-			_, err = c.Reconfig(s, -1)
+			config, _, err := c.Reconfig(s, -1)
 			requireNoError(t, err, "failed to reconfig cluster")
-
 			// reconfig to all the hosts again
+			data, _, err := c.Get(ConfigNode)
+			if err != nil {
+				t.Fatalf("get config returned error: %+v", err)
+			}
+			if !reflect.DeepEqual(data, config) {
+				t.Fatalf("inconsistent configuration returned, got %s, but expacted %s", config, data)
+			}
+
 			s = []string{}
 			for _, host := range tc.Config.Servers {
 				s = append(s, fmt.Sprintf("server.%d=%s:%d:%d;%d\n", host.ID, host.Host, host.PeerPort, host.LeaderElectionPort, tc.Config.ClientPort))
 			}
 
-			_, err = c.Reconfig(s, -1)
+			config, _, err = c.Reconfig(s, -1)
 			requireNoError(t, err, "failed to reconfig cluster")
+			data, _, err = c.Get(ConfigNode)
+			if err != nil {
+				t.Fatalf("get config returned error: %+v", err)
+			}
+			if !reflect.DeepEqual(data, config) {
+				t.Fatalf("inconsistent configuration returned, got %s, but expacted %s", config, data)
+			}
 		})
 	})
 }
@@ -716,7 +731,7 @@ func TestChildren(t *testing.T) {
 			hb := make([]byte, 2000)
 			prefix := []byte("/gozk-test-big/")
 			for i := 0; i < 1000; i++ {
-				_, err := rand.Read(rb)
+				_, err := crand.Read(rb)
 				if err != nil {
 					t.Fatal("Cannot create random znode name")
 				}

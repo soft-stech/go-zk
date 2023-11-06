@@ -148,7 +148,7 @@ type HostProvider interface {
 	// Next returns the next server to connect to. retryStart will be true if we've looped through
 	// all known servers without Connected() being called.
 	Next() (server string, retryStart bool)
-	// Notify the HostProvider of a successful connection.
+	// Connected notifies the HostProvider of a successful connection.
 	Connected()
 }
 
@@ -1666,8 +1666,8 @@ func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, e
 //
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
-// Returns the new configuration znode stat.
-func (c *Conn) IncrementalReconfig(joining, leaving []string, version int64) (*Stat, error) {
+// Returns the new configuration data and znode stat.
+func (c *Conn) IncrementalReconfig(joining, leaving []string, version int64) ([]byte, *Stat, error) {
 	return c.IncrementalReconfigCtx(context.Background(), joining, leaving, version)
 }
 
@@ -1676,8 +1676,8 @@ func (c *Conn) IncrementalReconfig(joining, leaving []string, version int64) (*S
 //
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
-// Returns the new configuration znode stat.
-func (c *Conn) IncrementalReconfigCtx(ctx context.Context, joining, leaving []string, version int64) (*Stat, error) {
+// Returns the new configuration data and znode stat.
+func (c *Conn) IncrementalReconfigCtx(ctx context.Context, joining, leaving []string, version int64) ([]byte, *Stat, error) {
 	// TODO: validate the shape of the member string to give early feedback.
 	request := &reconfigRequest{
 		JoiningServers: []byte(strings.Join(joining, ",")),
@@ -1693,8 +1693,8 @@ func (c *Conn) IncrementalReconfigCtx(ctx context.Context, joining, leaving []st
 //
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
-// Returns the new configuration znode stat.
-func (c *Conn) Reconfig(members []string, version int64) (*Stat, error) {
+// Returns the new configuration data and znode stat.
+func (c *Conn) Reconfig(members []string, version int64) ([]byte, *Stat, error) {
 	return c.ReconfigCtx(context.Background(), members, version)
 }
 
@@ -1703,8 +1703,8 @@ func (c *Conn) Reconfig(members []string, version int64) (*Stat, error) {
 //
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
-// Returns the new configuration znode stat.
-func (c *Conn) ReconfigCtx(ctx context.Context, members []string, version int64) (*Stat, error) {
+// Returns the new configuration data and znode stat.
+func (c *Conn) ReconfigCtx(ctx context.Context, members []string, version int64) ([]byte, *Stat, error) {
 	req := &reconfigRequest{
 		NewMembers:  []byte(strings.Join(members, ",")),
 		CurConfigId: version,
@@ -1713,14 +1713,14 @@ func (c *Conn) ReconfigCtx(ctx context.Context, members []string, version int64)
 	return c.internalReconfig(ctx, req)
 }
 
-func (c *Conn) internalReconfig(ctx context.Context, req *reconfigRequest) (*Stat, error) {
-	resp := &reconfigReponse{}
-	_, aborted, err := c.request(ctx, opReconfig, req, resp, nil)
+func (c *Conn) internalReconfig(ctx context.Context, req *reconfigRequest) ([]byte, *Stat, error) {
+	res := &reconfigReponse{}
+	_, aborted, err := c.request(ctx, opReconfig, req, res, nil)
 	if err != nil && aborted {
-		return nil, err // Request aborted, so we cannot read from `res` without risking a data race.
+		return nil, nil, err // Request aborted, so we cannot read from `res` without risking a data race.
 	}
 
-	return &resp.Stat, err
+	return res.Data, &res.Stat, err
 }
 
 // Server returns the current or last-connected server name.
